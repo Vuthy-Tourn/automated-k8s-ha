@@ -1,0 +1,199 @@
+---
+# ================================================================
+# KUBESPRAY DEPLOY — runs on master1 only
+#
+# Mirrors the exact manual steps:
+#   1. git clone kubespray
+#   2. rm -rf .git .github .gitlab-ci
+#   3. pip install -r requirements.txt
+#   4. Write inventory/sample/inventory.ini  (real IPs injected)
+#   5. Write addons.yml
+#   6. Write Justfile
+#   7. ansible-playbook cluster.yml  (master1 → all nodes internally)
+#   8. Set up kubectl for ssh_user on master1 (no local pull)
+# ================================================================
+
+# ── Push SSH key so master1 can reach all other nodes ────────────
+- name: Push cluster SSH private key to master1
+  copy:
+    src: "{{ ssh_private_key }}"
+    dest: "/home/{{ ssh_user }}/.ssh/id_rsa"
+    owner: "{{ ssh_user }}"
+    group: "{{ ssh_user }}"
+    mode: '0600'
+
+- name: Push cluster SSH public key to master1
+  copy:
+    src: "{{ ssh_public_key }}"
+    dest: "/home/{{ ssh_user }}/.ssh/id_rsa.pub"
+    owner: "{{ ssh_user }}"
+    group: "{{ ssh_user }}"
+    mode: '0644'
+
+- name: Scan and register all node host keys on master1
+  shell: |
+    ssh-keyscan -t rsa {{ hostvars[item]['ip'] }} \
+      >> /home/{{ ssh_user }}/.ssh/known_hosts 2>/dev/null
+    sort -u /home/{{ ssh_user }}/.ssh/known_hosts \
+      -o /home/{{ ssh_user }}/.ssh/known_hosts
+  loop: "{{ groups['all'] }}"
+  changed_when: true
+
+# ── Install system deps on master1 ───────────────────────────────
+- name: Install git, pip, rsync on master1
+  apt:
+    name:
+      - git
+      - python3-pip
+      - python3-venv
+      - python3-netaddr
+      - rsync
+      - just          # for Justfile support
+    state: present
+    update_cache: yes
+  ignore_errors: yes  # 'just' may not be in apt — installed below if missing
+
+- name: Install 'just' from GitHub releases if apt missed it
+  shell: |
+    if ! command -v just &>/dev/null; then
+      curl -fsSL https://github.com/casey/just/releases/latest/download/just-x86_64-unknown-linux-musl.tar.gz \
+        | tar -xz -C /usr/local/bin just
+    fi
+  changed_when: true
+
+# ── Step 1: Clone Kubespray ───────────────────────────────────────
+- name: Clone Kubespray {{ kubespray_version }}
+  git:
+    repo: "{{ kubespray_repo }}"
+    dest: "/home/{{ ssh_user }}/kubespray"
+    version: "{{ kubespray_version }}"
+    force: yes
+  become_user: "{{ ssh_user }}"
+
+# ── Step 2: Remove unneeded git/CI dirs ──────────────────────────
+- name: Remove .git .github .gitlab-ci from kubespray
+  file:
+    path: "/home/{{ ssh_user }}/kubespray/{{ item }}"
+    state: absent
+  loop:
+    - .git
+    - .github
+    - .gitlab-ci.yml
+
+# ── Step 3: pip install -r requirements.txt ───────────────────────
+- name: Create Python venv for Kubespray
+  command: python3 -m venv /home/{{ ssh_user }}/kubespray/venv
+  args:
+    creates: "/home/{{ ssh_user }}/kubespray/venv/bin/activate"
+  become_user: "{{ ssh_user }}"
+
+- name: pip install -r requirements.txt (inside venv)
+  pip:
+    requirements: "/home/{{ ssh_user }}/kubespray/requirements.txt"
+    virtualenv:   "/home/{{ ssh_user }}/kubespray/venv"
+    state: present
+
+- name: pip install extra packages needed
+  pip:
+    name:
+      - netaddr
+      - jmespath
+      - ruamel.yaml
+    virtualenv: "/home/{{ ssh_user }}/kubespray/venv"
+
+# ── Step 4: Write inventory/sample/inventory.ini ─────────────────
+# Uses real internal IPs from node_info (populated by create-gcp.yml tasks)
+# master1 gets ansible_connection=local because it's running the playbook
+- name: Write inventory/sample/inventory.ini with real node IPs
+  template:
+    src: inventory.ini.j2
+    dest: "/home/{{ ssh_user }}/kubespray/inventory/sample/inventory.ini"
+    owner: "{{ ssh_user }}"
+    mode: '0644'
+
+# ── Step 5: Write addons.yml ──────────────────────────────────────
+- name: Write addons.yml (dashboard, helm, nginx, argocd, etc.)
+  template:
+    src: addons.yml.j2
+    dest: "/home/{{ ssh_user }}/kubespray/inventory/sample/group_vars/k8s_cluster/addons.yml"
+    owner: "{{ ssh_user }}"
+    mode: '0644'
+
+- name: Write k8s-cluster.yml (cluster settings)
+  template:
+    src: k8s-cluster.yml.j2
+    dest: "/home/{{ ssh_user }}/kubespray/inventory/sample/group_vars/k8s_cluster/k8s-cluster.yml"
+    owner: "{{ ssh_user }}"
+    mode: '0644'
+
+# ── Step 6: Write Justfile ────────────────────────────────────────
+- name: Write Justfile for reusable cluster commands
+  template:
+    src: Justfile.j2
+    dest: "/home/{{ ssh_user }}/kubespray/Justfile"
+    owner: "{{ ssh_user }}"
+    mode: '0755'
+
+# ── Step 7: Run cluster.yml via Justfile / ansible-playbook ───────
+- name: Run Kubespray cluster.yml from master1 (20-35 min)
+  shell: |
+    set -euo pipefail
+    cd /home/{{ ssh_user }}/kubespray
+    source venv/bin/activate
+
+    ansible-playbook -b -v \
+      -i inventory/sample/inventory.ini \
+      cluster.yml \
+      2>&1 | tee /home/{{ ssh_user }}/kubespray-install.log
+
+    echo "EXIT_CODE:$?"
+  become_user: "{{ ssh_user }}"
+  async: 7200
+  poll: 30
+  register: kubespray_run
+
+- name: Confirm Kubespray succeeded
+  fail:
+    msg: |
+      Kubespray failed!
+      SSH to master1 and check: tail -100 ~/kubespray-install.log
+  when: kubespray_run.rc is defined and kubespray_run.rc != 0
+
+# ── Step 8: Set up kubectl for ssh_user on master1 ───────────────
+# (no kubeconfig pulled to local — kubectl lives on master1)
+- name: Create ~/.kube directory for {{ ssh_user }}
+  file:
+    path: "/home/{{ ssh_user }}/.kube"
+    state: directory
+    owner: "{{ ssh_user }}"
+    group: "{{ ssh_user }}"
+    mode: '0700'
+
+- name: Copy admin.conf to ~/.kube/config
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: "/home/{{ ssh_user }}/.kube/config"
+    remote_src: yes
+    owner: "{{ ssh_user }}"
+    group: "{{ ssh_user }}"
+    mode: '0600'
+
+- name: Verify cluster is healthy from master1
+  command: kubectl get nodes -o wide
+  become_user: "{{ ssh_user }}"
+  environment:
+    KUBECONFIG: "/home/{{ ssh_user }}/.kube/config"
+  register: kubectl_nodes
+  retries: 5
+  delay: 15
+  until: kubectl_nodes.rc == 0
+
+- name: Show cluster node status
+  debug:
+    msg: |
+      ✅ Cluster is up! Run from master1:
+
+        kubectl get nodes -o wide
+        kubectl get pods -A
+
+      {{ kubectl_nodes.stdout }}

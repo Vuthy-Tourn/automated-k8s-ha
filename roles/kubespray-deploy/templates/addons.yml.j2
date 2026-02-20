@@ -1,0 +1,25 @@
+---
+# ================================================================
+# Kubespray Addons — matches the installation doc exactly
+# File: inventory/sample/group_vars/k8s_cluster/addons.yml
+# ================================================================
+
+# Kubernetes Dashboard
+dashboard_enabled: true
+
+# Helm package manager
+helm_enabled: true
+
+# Metrics Server (kubectl top nodes/pods)
+metrics_server_enabled: true
+
+# NGINX Ingress Controller
+ingress_nginx_enabled: true
+ingress_nginx_host_network: false
+
+# cert-manager (TLS certificates)
+cert_manager_enabled: true
+
+# ArgoCD (GitOps)
+argocd_enabled: true
+

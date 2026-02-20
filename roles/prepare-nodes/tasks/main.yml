@@ -1,0 +1,137 @@
+---
+# ================================================================
+# PREPARE NODES — runs against all 5 VMs from local controller
+# ================================================================
+
+- name: Wait for apt lock to be released
+  shell: |
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+          fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+      echo "Waiting for apt lock..."; sleep 5;
+    done
+  changed_when: false
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Install required base packages
+  apt:
+    name:
+      - curl
+      - wget
+      - git
+      - vim
+      - net-tools
+      - python3-pip
+      - python3-netaddr
+      - python3-setuptools
+      - apt-transport-https
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - socat
+      - conntrack
+      - ipset
+      - ipvsadm
+      - nfs-common
+      - chrony
+      - rsync
+      - unzip
+    state: present
+    update_cache: yes
+
+- name: Disable swap immediately
+  command: swapoff -a
+  when: ansible_swaptotal_mb > 0
+  changed_when: true
+
+- name: Remove swap from /etc/fstab permanently
+  replace:
+    path: /etc/fstab
+    regexp: '^([^#].*?\sswap\s+\S+\s+.*)$'
+    replace: '# \1'
+
+- name: Load required kernel modules now
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - br_netfilter
+    - overlay
+    - ip_vs
+    - ip_vs_rr
+    - ip_vs_wrr
+    - ip_vs_sh
+    - nf_conntrack
+
+- name: Persist kernel modules across reboots
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      br_netfilter
+      overlay
+      ip_vs
+      ip_vs_rr
+      ip_vs_wrr
+      ip_vs_sh
+      nf_conntrack
+
+- name: Apply sysctl settings for Kubernetes
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  loop:
+    - { key: 'net.bridge.bridge-nf-call-iptables',  value: '1' }
+    - { key: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+    - { key: 'net.ipv4.ip_forward',                 value: '1' }
+    - { key: 'net.ipv4.conf.all.rp_filter',         value: '1' }
+    - { key: 'vm.max_map_count',                     value: '262144' }
+    - { key: 'fs.inotify.max_user_watches',          value: '524288' }
+    - { key: 'fs.inotify.max_user_instances',        value: '512' }
+    - { key: 'kernel.pid_max',                       value: '4194304' }
+
+- name: Set hostname to match inventory name
+  hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Add all cluster nodes to /etc/hosts (internal IPs)
+  lineinfile:
+    path: /etc/hosts
+    regexp: "^.*{{ item }}$"
+    line: "{{ hostvars[item]['ip'] }} {{ item }}"
+    state: present
+  loop: "{{ groups['all'] }}"
+
+- name: Set file descriptor limits
+  pam_limits:
+    domain: '*'
+    limit_type: "{{ item.type }}"
+    limit_item: "{{ item.item }}"
+    value: "{{ item.value }}"
+  loop:
+    - { type: 'soft', item: 'nofile',   value: '1048576' }
+    - { type: 'hard', item: 'nofile',   value: '1048576' }
+    - { type: 'soft', item: 'nproc',    value: 'unlimited' }
+    - { type: 'hard', item: 'nproc',    value: 'unlimited' }
+
+- name: Start and enable chrony (NTP)
+  systemd:
+    name: chrony
+    state: started
+    enabled: yes
+
+- name: Disable UFW (kubespray manages its own firewall rules)
+  systemd:
+    name: ufw
+    state: stopped
+    enabled: no
+  ignore_errors: yes
+
+- name: Node preparation complete
+  debug:
+    msg: "✅ Node {{ inventory_hostname }} prepared ({{ ansible_host }})"

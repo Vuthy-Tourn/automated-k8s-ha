@@ -1,0 +1,99 @@
+---
+# ================================================================
+# ARGOCD — install via kubectl from local controller
+# ================================================================
+
+- name: Create ArgoCD namespace
+  command: kubectl create namespace {{ argocd_namespace }}
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  delegate_to: localhost
+  ignore_errors: yes
+
+- name: Apply ArgoCD install manifest
+  command: >
+    kubectl apply -n {{ argocd_namespace }}
+    -f https://raw.githubusercontent.com/argoproj/argo-cd/{{ argocd_version }}/manifests/install.yaml
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  delegate_to: localhost
+
+- name: Wait for ArgoCD server deployment to be available
+  command: >
+    kubectl rollout status deployment/argocd-server
+    -n {{ argocd_namespace }}
+    --timeout=300s
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  delegate_to: localhost
+
+- name: Patch ArgoCD to run in insecure mode (nginx handles TLS)
+  command: >
+    kubectl patch configmap argocd-cmd-params-cm
+    -n {{ argocd_namespace }}
+    --type merge
+    -p '{"data": {"server.insecure": "true"}}'
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  delegate_to: localhost
+
+- name: Hash ArgoCD admin password with bcrypt
+  shell: |
+    python3 -c "
+    import bcrypt
+    pw = b'{{ argocd_admin_password }}'
+    hashed = bcrypt.hashpw(pw, bcrypt.gensalt(10)).decode()
+    print(hashed)
+    "
+  register: argocd_bcrypt
+  delegate_to: localhost
+
+- name: Patch ArgoCD admin password secret
+  command: >
+    kubectl -n {{ argocd_namespace }} patch secret argocd-secret
+    --type merge
+    -p '{"stringData": {
+      "admin.password": "{{ argocd_bcrypt.stdout }}",
+      "admin.passwordMtime": "{{ ansible_date_time.iso8601 }}"
+    }}'
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  delegate_to: localhost
+
+- name: Restart ArgoCD server to apply config
+  command: kubectl rollout restart deployment/argocd-server -n {{ argocd_namespace }}
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  delegate_to: localhost
+
+- name: Apply ArgoCD NodePort service (GCP external access)
+  template:
+    src: argocd-nodeport.yaml.j2
+    dest: /tmp/argocd-nodeport.yaml
+  delegate_to: localhost
+
+- name: Deploy ArgoCD NodePort service
+  command: kubectl apply -f /tmp/argocd-nodeport.yaml
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  delegate_to: localhost
+
+- name: Apply ArgoCD Ingress
+  template:
+    src: argocd-ingress.yaml.j2
+    dest: /tmp/argocd-ingress.yaml
+  delegate_to: localhost
+
+- name: Deploy ArgoCD Ingress
+  command: kubectl apply -f /tmp/argocd-ingress.yaml
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+  delegate_to: localhost
+
+- name: ArgoCD summary
+  debug:
+    msg: |
+      ✅ ArgoCD deployed!
+      🔗 URL      : https://{{ argocd_subdomain }}.{{ cloudflare_zone }}
+      👤 Username : admin
+      🔑 Password : {{ argocd_admin_password }}

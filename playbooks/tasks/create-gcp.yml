@@ -1,0 +1,224 @@
+---
+# ================================================================
+# CREATE-GCP — Provision all GCP infrastructure
+# Included by playbooks/main.yml Stage 1
+# ================================================================
+
+# ── Controller dependencies ───────────────────────────────────────
+- name: Install required Python packages on controller
+  pip:
+    name:
+      - requests
+      - google-auth
+      - google-api-python-client
+    state: present
+
+- name: Install Ansible GCP collection
+  command: ansible-galaxy collection install google.cloud --force
+  run_once: true
+
+# ── SSH Key ───────────────────────────────────────────────────────
+- name: Generate SSH key pair for cluster nodes
+  openssh_keypair:
+    path: "{{ ssh_private_key }}"
+    type: rsa
+    size: 4096
+    comment: "k8s-cluster-key"
+    force: false
+
+- name: Read SSH public key
+  slurp:
+    src: "{{ ssh_public_key }}"
+  register: _ssh_pub_raw
+
+- name: Set SSH public key fact
+  set_fact:
+    ssh_pub_key: "{{ _ssh_pub_raw.content | b64decode | trim }}"
+
+# ── VPC Network ───────────────────────────────────────────────────
+- name: Create GCP VPC network
+  google.cloud.gcp_compute_network:
+    name: "{{ gcp_network }}"
+    auto_create_subnetworks: false
+    project: "{{ gcp_project }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ gcp_service_account }}"
+    state: present
+  register: gcp_network_result
+
+- name: Create GCP subnet
+  google.cloud.gcp_compute_subnetwork:
+    name: "{{ gcp_subnet }}"
+    ip_cidr_range: "{{ gcp_subnet_cidr }}"
+    region: "{{ gcp_region }}"
+    network: "{{ gcp_network_result }}"
+    project: "{{ gcp_project }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ gcp_service_account }}"
+    state: present
+  register: gcp_subnet_result
+
+# ── Firewall Rules ───
+- name: Allow SSH (key-based only, no password)
+  google.cloud.gcp_compute_firewall:
+    name: "{{ network_name }}-allow-ssh"
+    network: "{{ network }}"
+    allowed:
+      - ip_protocol: tcp
+        ports: ["22"]
+    source_ranges:
+      - "0.0.0.0/0"
+    project: "{{ gcp_project_id }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ gcp_service_account_file }}"
+    state: present
+
+- name: Allow HTTP and HTTPS traffic
+  google.cloud.gcp_compute_firewall:
+    name: "{{ network_name }}-allow-web"
+    network: "{{ network }}"
+    allowed:
+      - ip_protocol: tcp
+        ports: ["80", "443"]
+    target_tags:
+      - http-server
+      - https-server
+    source_ranges:
+      - "0.0.0.0/0"
+    project: "{{ gcp_project_id }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ gcp_service_account_file }}"
+    state: present
+
+# ── Build flat VM list from node_groups ───────────────────────────
+- name: Build flat VM definition list from node_groups
+  set_fact:
+    all_vm_definitions: "{{ _vms }}"
+  vars:
+    _vms: >-
+      {%- set vms = [] -%}
+      {%- for group in node_groups -%}
+        {%- for idx in range(group.count | int) -%}
+          {%- set _ = vms.append({
+            'name':         cluster_name ~ '-' ~ group.role ~ '-' ~ (idx + 1) | string,
+            'role':         group.role,
+            'zone':         group.zone,
+            'machine_type': group.machine_type | default(gcp_machine_type),
+            'disk_size':    group.disk_size_gb | default(gcp_disk_size_gb) | int,
+            'disk_type':    group.disk_type    | default(gcp_disk_type),
+            'tags':         group.tags         | default([cluster_name ~ '-node', cluster_name ~ '-' ~ group.role])
+          }) -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ vms }}
+
+- name: Show VM plan
+  debug:
+    msg: |
+      📋 VM plan ({{ all_vm_definitions | length }} total):
+      {% for vm in all_vm_definitions %}
+        [{{ vm.role | upper }}] {{ vm.name }}  zone={{ vm.zone }}  type={{ vm.machine_type }}
+      {% endfor %}
+
+# ── Create ALL VMs in one loop ────────────────────────────────────
+- name: Create all cluster VMs
+  google.cloud.gcp_compute_instance:
+    name: "{{ item.name }}"
+    machine_type: "{{ item.machine_type }}"
+    zone: "{{ item.zone }}"
+    tags:
+      items: "{{ item.tags }}"
+    disks:
+      - auto_delete: true
+        boot: true
+        initialize_params:
+          source_image: "projects/{{ gcp_image_project }}/global/images/family/{{ gcp_image_family }}"
+          disk_size_gb: "{{ item.disk_size }}"
+          disk_type: "projects/{{ gcp_project }}/zones/{{ item.zone }}/diskTypes/{{ item.disk_type }}"
+    network_interfaces:
+      - network: "{{ gcp_network_result }}"
+        subnetwork: "{{ gcp_subnet_result }}"
+        access_configs:
+          - name: External NAT
+            type: ONE_TO_ONE_NAT
+    metadata:
+      ssh-keys: "{{ ssh_user }}:{{ ssh_pub_key }}"
+      startup-script: "{{ lookup('template', '../../templates/startup-script.sh.j2') }}"
+    project: "{{ gcp_project }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ gcp_service_account }}"
+    state: present
+  loop: "{{ all_vm_definitions }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.zone }})"
+  register: vm_results
+
+# ── Extract IPs ───────────────────────────────────────────────────
+- name: Wait for VMs to finish startup-script
+  pause:
+    seconds: 30
+    prompt: "Waiting for VMs to finish booting..."
+
+- name: Build unified node_info list
+  set_fact:
+    node_info: "{{ _nodes }}"
+  vars:
+    _nodes: >-
+      {%- set nodes = [] -%}
+      {%- for i in range(vm_results.results | length) -%}
+        {%- set res   = vm_results.results[i] -%}
+        {%- set defn  = all_vm_definitions[i] -%}
+        {%- set iface = res.networkInterfaces[0] -%}
+        {%- set _ = nodes.append({
+          'name':        res.name,
+          'role':        defn.role,
+          'zone':        defn.zone,
+          'external_ip': iface.accessConfigs[0].natIP | default(''),
+          'internal_ip': iface.networkIP
+        }) -%}
+      {%- endfor -%}
+      {{ nodes }}
+
+- name: Display provisioned VMs
+  debug:
+    msg: |
+      ✅ GCP VMs ready ({{ node_info | length }} total):
+      {% for node in node_info %}
+      [{{ node.role | upper | rjust(6) }}] {{ node.name | ljust(28) }}  ext={{ node.external_ip | ljust(16) }}  int={{ node.internal_ip }}
+      {% endfor %}
+
+# ── Per-role IP facts ─────────────────────────────────────────────
+- name: Set per-role IP facts
+  set_fact:
+    "{{ item.role }}_ips":          "{{ node_info | selectattr('role','equalto', item.role) | map(attribute='external_ip')  | list }}"
+    "{{ item.role }}_internal_ips": "{{ node_info | selectattr('role','equalto', item.role) | map(attribute='internal_ip') | list }}"
+    "{{ item.role }}_names":        "{{ node_info | selectattr('role','equalto', item.role) | map(attribute='name')        | list }}"
+  loop: "{{ node_groups }}"
+  loop_control:
+    label: "{{ item.role }}"
+
+# ── Write inventory files ─────────────────────────────────────────
+- name: Write dynamic hosts.ini
+  template:
+    src: "../../templates/dynamic-hosts.ini.j2"
+    dest: "inventory/hosts.ini"
+
+- name: Write Kubespray hosts.yaml (for master1 to use)
+  template:
+    src: "../../templates/kubespray-hosts.yaml.j2"
+    dest: "inventory/kubespray-hosts.yaml"
+
+- name: Refresh in-memory Ansible inventory
+  meta: refresh_inventory
+
+# ── Wait for SSH ──────────────────────────────────────────────────
+- name: Wait for SSH on all nodes
+  wait_for:
+    host:    "{{ item.external_ip }}"
+    port:    22
+    timeout: 300
+    state:   started
+    delay:   5
+  loop: "{{ node_info }}"
+  loop_control:
+    label: "{{ item.name }} → {{ item.external_ip }}"

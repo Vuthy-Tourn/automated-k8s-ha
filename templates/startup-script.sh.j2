@@ -1,0 +1,32 @@
+#!/bin/bash
+# ================================================================
+# GCP VM startup-script — runs once at first boot
+# Ensures ubuntu user + SSH key + sudo + Python are ready
+# ================================================================
+set -euo pipefail
+
+SSH_USER="{{ ssh_user }}"
+SSH_KEY="{{ ssh_pub_key }}"
+
+# Create user if not present (Ubuntu 22.04 images usually have it)
+if ! id "$SSH_USER" &>/dev/null; then
+  useradd -m -s /bin/bash "$SSH_USER"
+fi
+
+# Inject SSH key
+mkdir -p /home/$SSH_USER/.ssh
+grep -qF "$SSH_KEY" /home/$SSH_USER/.ssh/authorized_keys 2>/dev/null \
+  || echo "$SSH_KEY" >> /home/$SSH_USER/.ssh/authorized_keys
+chmod 700 /home/$SSH_USER/.ssh
+chmod 600 /home/$SSH_USER/.ssh/authorized_keys
+chown -R $SSH_USER:$SSH_USER /home/$SSH_USER/.ssh
+
+# Passwordless sudo
+echo "$SSH_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$SSH_USER
+chmod 440 /etc/sudoers.d/$SSH_USER
+
+# Minimal packages Ansible needs
+apt-get update -qq
+apt-get install -y python3 python3-pip
+
+echo "Startup-script complete for {{ inventory_hostname | default('vm') }}"

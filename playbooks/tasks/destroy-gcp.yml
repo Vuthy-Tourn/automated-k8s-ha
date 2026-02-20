@@ -1,0 +1,88 @@
+---
+# ================================================================
+# DESTROY-GCP — Remove all GCP cluster resources
+# Run: ansible-playbook playbooks/tasks/destroy-gcp.yml
+#   or via Justfile: just destroy-infra
+# ================================================================
+- name: "TEARDOWN | Destroy all GCP cluster resources"
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  vars_files:
+    - ../../vars/all.yml
+
+  tasks:
+    - name: Confirm teardown
+      pause:
+        prompt: |
+          ⚠️  WARNING: This will DESTROY all GCP VMs and network resources
+          for cluster '{{ cluster_name }}' in project '{{ gcp_project }}'.
+          Press ENTER to continue or Ctrl+C to abort.
+
+    - name: Build VM definition list from node_groups
+      set_fact:
+        all_vm_definitions: "{{ _vms }}"
+      vars:
+        _vms: >-
+          {%- set vms = [] -%}
+          {%- for group in node_groups -%}
+            {%- for idx in range(group.count | int) -%}
+              {%- set _ = vms.append({
+                'name': cluster_name ~ '-' ~ group.role ~ '-' ~ (idx + 1) | string,
+                'zone': group.zone
+              }) -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ vms }}
+
+    - name: Delete all cluster VMs
+      google.cloud.gcp_compute_instance:
+        name: "{{ item.name }}"
+        zone: "{{ item.zone }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_service_account }}"
+        state: absent
+      loop: "{{ all_vm_definitions }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Delete firewall rules
+      google.cloud.gcp_compute_firewall:
+        name: "{{ cluster_name }}-{{ item.name }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_service_account }}"
+        state: absent
+      loop: "{{ firewall_rules }}"
+      loop_control:
+        label: "{{ cluster_name }}-{{ item.name }}"
+
+    - name: Delete subnet
+      google.cloud.gcp_compute_subnetwork:
+        name: "{{ gcp_subnet }}"
+        region: "{{ gcp_region }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_service_account }}"
+        state: absent
+
+    - name: Delete VPC network
+      google.cloud.gcp_compute_network:
+        name: "{{ gcp_network }}"
+        project: "{{ gcp_project }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ gcp_service_account }}"
+        state: absent
+
+    - name: Clean up generated inventory files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - inventory/hosts.ini
+        - inventory/kubespray-hosts.yaml
+
+    - name: Teardown complete
+      debug:
+        msg: "🗑️  All GCP resources for '{{ cluster_name }}' destroyed."

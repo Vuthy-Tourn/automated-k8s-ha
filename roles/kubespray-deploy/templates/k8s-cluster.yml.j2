@@ -1,0 +1,35 @@
+---
+# ================================================================
+# Kubespray k8s-cluster group vars
+# File: inventory/sample/group_vars/k8s_cluster/k8s-cluster.yml
+# ================================================================
+
+kube_version: "{{ kube_version }}"
+kube_network_plugin: "{{ kube_network_plugin }}"
+cluster_name: "{{ cluster_name }}.local"
+
+kube_pods_subnet: "{{ kube_pod_subnet }}"
+kube_service_addresses: "{{ kube_service_subnet }}"
+
+container_manager: containerd
+
+kube_vip_enabled: true
+kube_vip_controlplane_enabled: true
+kube_vip_address: "{{ kube_vip_address }}"
+loadbalancer_apiserver:
+  address: "{{ kube_vip_address }}"
+  port: 6443
+
+# API server cert SANs — VIP + all master IPs (populated from node_info)
+supplementary_addresses_in_ssl_keys:
+  - "{{ kube_vip_address }}"
+{% for node in node_info | selectattr('role', 'equalto', 'master') | list %}
+  - "{{ node.external_ip }}"
+  - "{{ node.internal_ip }}"
+{% endfor %}
+
+dns_mode: coredns
+enable_nodelocaldns: true
+kube_proxy_strict_arp: true
+kubernetes_audit: true
+rbac_enabled: true

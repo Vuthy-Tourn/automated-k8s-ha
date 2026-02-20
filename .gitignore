@@ -1,0 +1,18 @@
+# ── Secrets — NEVER commit ────────────────────────────────────────
+credential/service-account.json
+credential/k8s-ssh-key
+credential/k8s-ssh-key.pub
+credential/k8s-kube.conf
+secrets/
+
+# ── Auto-generated inventory ──────────────────────────────────────
+inventory/hosts.ini
+inventory/kubespray-hosts.yaml
+inventory/
+
+# ── Ansible runtime ───────────────────────────────────────────────
+/tmp/ansible_facts_cache/
+*.retry
+*.log
+__pycache__/
+.ansible/

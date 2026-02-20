@@ -1,0 +1,127 @@
+---
+# ================================================================
+# GLOBAL CONFIGURATION — edit this file before running
+# ================================================================
+
+# ── GCP Settings ─────────────────────────────────────────────────
+gcp_project:          "winged-memory-485604-r8"          # GCP project ID
+gcp_service_account:  "/Users/macbookpro/Desktop/k8s-gcp-automation/credential/service-account.json"             # Path to SA JSON key
+gcp_region:           "asia-northeast3"
+gcp_zone_masters:     "asia-northeast3-a"
+gcp_zone_workers:     "asia-northeast3-b"
+
+# ── VM Defaults (overridable per node_group) ──────────────────────
+gcp_machine_type:     "e2-standard-2"                 # 2 vCPU / 8 GB RAM
+gcp_image_family:     "ubuntu-2204-lts"
+gcp_image_project:    "ubuntu-os-cloud"
+gcp_disk_size_gb:     50
+gcp_disk_type:        "pd-ssd"
+gcp_network:          "k8s-network"
+gcp_subnet:           "k8s-subnet"
+gcp_subnet_cidr:      "10.10.0.0/24"
+
+# ── Cluster Identity ──────────────────────────────────────────────
+cluster_name:         "ha-k8s"
+
+# ── Node Groups — THE only place you change topology ─────────────
+# Each entry produces `count` VMs named: <cluster_name>-<role>-N
+#
+# Scaling examples:
+#   5 masters:  change count: 3 → 5
+#   3 workers:  change count: 2 → 3
+#   New role:   add a new list item (e.g. infra, gpu-worker)
+#
+# Per-group overrides (optional — falls back to gcp_* defaults):
+#   machine_type, disk_size_gb, disk_type, tags
+node_groups:
+  - role:         master
+    count:        3
+    zone:         "{{ gcp_zone_masters }}"
+    machine_type: "{{ gcp_machine_type }}"   # override here for different sizing
+    disk_size_gb: "{{ gcp_disk_size_gb }}"
+    tags:
+      - "{{ cluster_name }}-node"
+      - "{{ cluster_name }}-master"
+
+  - role:         worker
+    count:        2
+    zone:         "{{ gcp_zone_workers }}"
+    machine_type: "{{ gcp_machine_type }}"
+    disk_size_gb: "{{ gcp_disk_size_gb }}"
+    tags:
+      - "{{ cluster_name }}-node"
+      - "{{ cluster_name }}-worker"
+
+  # Example: add a dedicated infra node group (uncomment to enable)
+  # - role:         infra
+  #   count:        1
+  #   zone:         "{{ gcp_zone_workers }}"
+  #   machine_type: "e2-standard-4"          # bigger for monitoring stack
+  #   disk_size_gb: 100
+  #   tags:
+  #     - "{{ cluster_name }}-node"
+  #     - "{{ cluster_name }}-infra"
+
+# ── Firewall Rules — driven by this list, no task changes needed ──
+firewall_rules:
+  - name: allow-internal
+    allowed:
+      - ip_protocol: tcp
+        ports: ["0-65535"]
+      - ip_protocol: udp
+        ports: ["0-65535"]
+      - ip_protocol: icmp
+    source_ranges: ["{{ gcp_subnet_cidr }}"]
+    target_tags:   ["{{ cluster_name }}-node"]
+
+  - name: allow-ssh
+    allowed:
+      - ip_protocol: tcp
+        ports: ["22"]
+    source_ranges: ["0.0.0.0/0"]
+    target_tags:   ["{{ cluster_name }}-node"]
+
+  - name: allow-k8s-api
+    allowed:
+      - ip_protocol: tcp
+        ports: ["6443"]
+    source_ranges: ["0.0.0.0/0"]
+    target_tags:   ["{{ cluster_name }}-master"]
+
+  - name: allow-http-https
+    allowed:
+      - ip_protocol: tcp
+        ports: ["80", "443"]
+    source_ranges: ["0.0.0.0/0"]
+    target_tags:   ["{{ cluster_name }}-worker"]
+
+  - name: allow-nodeport
+    allowed:
+      - ip_protocol: tcp
+        ports: ["30000-32767"]
+    source_ranges: ["0.0.0.0/0"]
+    target_tags:   ["{{ cluster_name }}-node"]
+
+# ── SSH ───────────────────────────────────────────────────────────
+ssh_user:             "macbookpro"
+ssh_private_key:      "files/k8s-ssh-key"
+ssh_public_key:       "files/k8s-ssh-key.pub"
+
+# ── Kubernetes ────────────────────────────────────────────────────
+kubespray_version:    "v2.24.0"
+kubespray_repo:       "https://github.com/kubernetes-sigs/kubespray.git"
+kube_version:         "v1.29.3"
+kube_network_plugin:  "calico"
+kube_pod_subnet:      "192.168.0.0/17"
+kube_service_subnet:  "192.168.128.0/17"
+# kube-vip VIP — must be a free IP inside gcp_subnet_cidr
+kube_vip_address:     "10.10.0.100"
+
+# ── ArgoCD ────────────────────────────────────────────────────────
+argocd_version:       "v2.10.3"
+argocd_namespace:     "argocd"
+argocd_admin_password: "ChangeMe123!"                 # Change this!
+
+# ── K8s Dashboard ────────────────────────────────────────────────
+dashboard_namespace:  "kubernetes-dashboard"
+         

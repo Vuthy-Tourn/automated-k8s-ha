@@ -1,0 +1,136 @@
+---
+# ================================================================
+# CLOUDFLARE DNS — create A records pointing to a worker node's
+# external IP (ingress traffic enters via GCP firewall → worker)
+# ================================================================
+
+- name: Lookup Cloudflare Zone ID
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones?name={{ cloudflare_zone }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: "application/json"
+    status_code: 200
+  register: cf_zone_lookup
+  delegate_to: localhost
+
+- name: Fail if zone not found
+  fail:
+    msg: "Cloudflare zone '{{ cloudflare_zone }}' not found. Check your domain and API token."
+  when: cf_zone_lookup.json.result | length == 0
+
+- name: Set Zone ID fact
+  set_fact:
+    cf_zone_id: "{{ cf_zone_lookup.json.result[0].id }}"
+
+# Use first worker external IP as ingress entry point
+# NGINX Ingress Controller (deployed by Kubespray) runs on workers
+# GCP firewall allows 80/443 to worker tag
+- name: Set DNS target IP to first worker external IP
+  set_fact:
+    ingress_ip: "{{ node_info | selectattr('role', 'equalto', 'worker') | map(attribute='external_ip') | first }}"
+
+- name: Display DNS target
+  debug:
+    msg: "🌐 DNS A records will point to worker node: {{ ingress_ip }}"
+
+# ── Helper: upsert a DNS record ───────────────────────────────────
+- name: Check if Dashboard DNS record already exists
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records?type=A&name={{ dashboard_subdomain }}.{{ cloudflare_zone }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+    status_code: 200
+  register: cf_check_dashboard
+  delegate_to: localhost
+
+- name: Create Dashboard DNS record (if new)
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      type: "A"
+      name: "{{ dashboard_subdomain }}.{{ cloudflare_zone }}"
+      content: "{{ ingress_ip }}"
+      ttl: 120
+      proxied: "{{ cloudflare_proxied }}"
+    status_code: [200, 201]
+  when: cf_check_dashboard.json.result | length == 0
+  delegate_to: localhost
+
+- name: Update Dashboard DNS record (if existing)
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records/{{ cf_check_dashboard.json.result[0].id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      type: "A"
+      name: "{{ dashboard_subdomain }}.{{ cloudflare_zone }}"
+      content: "{{ ingress_ip }}"
+      ttl: 120
+      proxied: "{{ cloudflare_proxied }}"
+    status_code: 200
+  when: cf_check_dashboard.json.result | length > 0
+  delegate_to: localhost
+
+- name: Check if ArgoCD DNS record already exists
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records?type=A&name={{ argocd_subdomain }}.{{ cloudflare_zone }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+    status_code: 200
+  register: cf_check_argocd
+  delegate_to: localhost
+
+- name: Create ArgoCD DNS record (if new)
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      type: "A"
+      name: "{{ argocd_subdomain }}.{{ cloudflare_zone }}"
+      content: "{{ ingress_ip }}"
+      ttl: 120
+      proxied: "{{ cloudflare_proxied }}"
+    status_code: [200, 201]
+  when: cf_check_argocd.json.result | length == 0
+  delegate_to: localhost
+
+- name: Update ArgoCD DNS record (if existing)
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records/{{ cf_check_argocd.json.result[0].id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ cloudflare_api_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      type: "A"
+      name: "{{ argocd_subdomain }}.{{ cloudflare_zone }}"
+      content: "{{ ingress_ip }}"
+      ttl: 120
+      proxied: "{{ cloudflare_proxied }}"
+    status_code: 200
+  when: cf_check_argocd.json.result | length > 0
+  delegate_to: localhost
+
+- name: DNS configuration complete
+  debug:
+    msg: |
+      ✅ Cloudflare DNS records configured!
+      📊 {{ dashboard_subdomain }}.{{ cloudflare_zone }} → {{ ingress_ip }}
+      🚀 {{ argocd_subdomain }}.{{ cloudflare_zone }}    → {{ ingress_ip }}
