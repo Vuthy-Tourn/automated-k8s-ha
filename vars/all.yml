@@ -108,13 +108,13 @@ firewall_rules:
 
 network_name: "k8s-infra-network"
 # ── SSH ───────────────────────────────────────────────────────────
-ssh_user: "macbookpro"
-ssh_private_key: "credentials/k8s-ssh-key"
-ssh_public_key: "credentials/k8s-ssh-key.pub"
+ssh_user: "k8s-cluster-key"
+ssh_private_key: "/Users/macbookpro/Desktop/k8s-gcp-automation/credentials/k8s-ssh-key"
+ssh_public_key:  "/Users/macbookpro/Desktop/k8s-gcp-automation/credentials/k8s-ssh-key.pub"
 
 # ── Kubernetes ────────────────────────────────────────────────────
 kubespray_version: "v2.24.0"
-kubespray_repo: "https://github.com/kubernetes-sigs/kubespray.git"
+kubespray_repo: "https://github.com/kubernetes-sigs/kubespray"
 kube_version: "v1.29.3"
 kube_network_plugin: "calico"
 kube_pod_subnet: "192.168.0.0/17"

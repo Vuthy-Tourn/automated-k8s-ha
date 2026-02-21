@@ -10,7 +10,7 @@ ansible_python_interpreter=/usr/bin/python3
 
 # ── Control Plane (masters) ───────────────────────────────────────
 [kube_control_plane]
-{% set masters = node_info | selectattr('role', 'equalto', 'master') | list %}
+{% set masters = node_groups | selectattr('role', 'equalto', 'master') | list %}
 {% for node in masters %}
 {% if loop.first %}
 # master1 uses ansible_connection=local — it IS the node running ansible-playbook

@@ -26,8 +26,9 @@
 - name: "STAGE 1 | Provision GCP VMs and build dynamic inventory"
   hosts: localhost
   connection: local
+  become: false 
   gather_facts: yes
-  tags: [provision, always]
+  tags: [provision]
   vars_files:
     - ../vars/all.yml
   tasks:

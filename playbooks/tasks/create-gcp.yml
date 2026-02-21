@@ -17,7 +17,6 @@
   command: ansible-galaxy collection install google.cloud --force
   run_once: true
 
-# ── SSH Key ───────────────────────────────────────────────────────
 - name: Ensure SSH key directory exists
   file:
     path: "{{ ssh_private_key | dirname }}"
@@ -31,6 +30,16 @@
     size: 4096
     comment: "k8s-cluster-key"
     force: false
+    mode: "0600"
+
+# Always enforce correct permissions regardless of whether key was just created
+- name: Enforce SSH key file permissions
+  file:
+    path: "{{ item.path }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ ssh_private_key }}",      mode: "0600" }
+    - { path: "{{ ssh_public_key }}",       mode: "0644" }
 
 - name: Read SSH public key
   slurp:

@@ -48,17 +48,20 @@
       - python3-venv
       - python3-netaddr
       - rsync
-      - just          # for Justfile support
     state: present
     update_cache: yes
-  ignore_errors: yes  # 'just' may not be in apt — installed below if missing
 
-- name: Install 'just' from GitHub releases if apt missed it
+- name: Install 'just' from GitHub releases if not installed
   shell: |
-    if ! command -v just &>/dev/null; then
-      curl -fsSL https://github.com/casey/just/releases/latest/download/just-x86_64-unknown-linux-musl.tar.gz \
-        | tar -xz -C /usr/local/bin just
+    if ! command -v just >/dev/null 2>&1; then
+      VERSION=$(curl -s https://api.github.com/repos/casey/just/releases/latest | grep tag_name | cut -d '"' -f4)
+      curl -L https://github.com/casey/just/releases/download/${VERSION}/just-${VERSION}-x86_64-unknown-linux-musl.tar.gz \
+        -o /tmp/just.tar.gz
+      tar -xzf /tmp/just.tar.gz -C /usr/local/bin just
+      chmod +x /usr/local/bin/just
     fi
+  args:
+    executable: /bin/bash
   changed_when: true
 
 # ── Step 1: Clone Kubespray ───────────────────────────────────────
@@ -67,6 +70,7 @@
     repo: "{{ kubespray_repo }}"
     dest: "/home/{{ ssh_user }}/kubespray"
     version: "{{ kubespray_version }}"
+    update: yes       # pull changes if already cloned
     force: yes
   become_user: "{{ ssh_user }}"
 
