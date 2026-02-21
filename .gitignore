@@ -1,4 +1,5 @@
 # ── Secrets — NEVER commit ────────────────────────────────────────
+credentials/*
 credential/service-account.json
 credential/k8s-ssh-key
 credential/k8s-ssh-key.pub

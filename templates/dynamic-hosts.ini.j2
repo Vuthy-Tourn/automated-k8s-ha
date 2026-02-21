@@ -5,7 +5,7 @@
 
 [all]
 {% for node in node_info %}
-{{ node.name | ljust(30) }} ansible_host={{ node.external_ip | ljust(16) }} ip={{ node.internal_ip | ljust(14) }} ansible_user={{ ssh_user }}
+{{ node.name }} ansible_host={{ node.external_ip }} ip={{ node.internal_ip }} ansible_user={{ ssh_user }}
 {% endfor %}
 
 # ── Role groups — built from node_groups config ───────────────────

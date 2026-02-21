@@ -18,6 +18,12 @@
   run_once: true
 
 # ── SSH Key ───────────────────────────────────────────────────────
+- name: Ensure SSH key directory exists
+  file:
+    path: "{{ ssh_private_key | dirname }}"
+    state: directory
+    mode: "0700"
+
 - name: Generate SSH key pair for cluster nodes
   openssh_keypair:
     path: "{{ ssh_private_key }}"
@@ -40,57 +46,77 @@
   google.cloud.gcp_compute_network:
     name: "{{ gcp_network }}"
     auto_create_subnetworks: false
-    project: "{{ gcp_project }}"
+    project: "{{ gcp_project_id }}"
     auth_kind: serviceaccount
-    service_account_file: "{{ gcp_service_account }}"
+    service_account_file: "{{ service_account_file }}"
     state: present
   register: gcp_network_result
 
-- name: Create GCP subnet
+# ── Subnets ───────────────────────────────────────────────────────
+- name: Create GCP subnets per region
   google.cloud.gcp_compute_subnetwork:
-    name: "{{ gcp_subnet }}"
-    ip_cidr_range: "{{ gcp_subnet_cidr }}"
-    region: "{{ gcp_region }}"
+    name: "{{ gcp_subnet }}-{{ item.region }}"
+    ip_cidr_range: "{{ item.subnet_cidr }}"
+    region: "{{ item.region }}"
     network: "{{ gcp_network_result }}"
-    project: "{{ gcp_project }}"
+    project: "{{ gcp_project_id }}"
     auth_kind: serviceaccount
-    service_account_file: "{{ gcp_service_account }}"
+    service_account_file: "{{ service_account_file }}"
     state: present
-  register: gcp_subnet_result
+  loop: >-
+    {{
+      node_groups
+      | selectattr('subnet_cidr', 'defined')
+      | selectattr('region', 'defined')
+      | unique
+      | list
+    }}
+  loop_control:
+    label: "{{ item.region }} → {{ item.subnet_cidr }}"
+  register: subnet_results
 
-# ── Firewall Rules ───
-- name: Allow SSH (key-based only, no password)
+# Build region → subnet result map so VM task can reference the registered object
+- name: Build subnet lookup map by region
+  set_fact:
+    subnet_by_region: >-
+      {{
+        subnet_by_region | default({}) | combine({
+          item.item.region: item
+        })
+      }}
+  loop: "{{ subnet_results.results }}"
+  loop_control:
+    label: "{{ item.item.region }}"
+
+# ── Firewall Rules ────────────────────────────────────────────────
+- name: Allow SSH
   google.cloud.gcp_compute_firewall:
-    name: "{{ network_name }}-allow-ssh"
-    network: "{{ network }}"
+    name: "{{ gcp_network }}-allow-ssh"
+    network: "{{ gcp_network_result }}"
     allowed:
       - ip_protocol: tcp
         ports: ["22"]
-    source_ranges:
-      - "0.0.0.0/0"
+    source_ranges: ["0.0.0.0/0"]
     project: "{{ gcp_project_id }}"
     auth_kind: serviceaccount
-    service_account_file: "{{ gcp_service_account_file }}"
+    service_account_file: "{{ service_account_file }}"
     state: present
 
 - name: Allow HTTP and HTTPS traffic
   google.cloud.gcp_compute_firewall:
-    name: "{{ network_name }}-allow-web"
-    network: "{{ network }}"
+    name: "{{ gcp_network }}-allow-web"
+    network: "{{ gcp_network_result }}"
     allowed:
       - ip_protocol: tcp
         ports: ["80", "443"]
-    target_tags:
-      - http-server
-      - https-server
-    source_ranges:
-      - "0.0.0.0/0"
+    target_tags: ["http-server", "https-server"]
+    source_ranges: ["0.0.0.0/0"]
     project: "{{ gcp_project_id }}"
     auth_kind: serviceaccount
-    service_account_file: "{{ gcp_service_account_file }}"
+    service_account_file: "{{ service_account_file }}"
     state: present
 
-# ── Build flat VM list from node_groups ───────────────────────────
+# ── Build flat VM list ────────────────────────────────────────────
 - name: Build flat VM definition list from node_groups
   set_fact:
     all_vm_definitions: "{{ _vms }}"
@@ -103,55 +129,64 @@
             'name':         cluster_name ~ '-' ~ group.role ~ '-' ~ (idx + 1) | string,
             'role':         group.role,
             'zone':         group.zone,
-            'machine_type': group.machine_type | default(gcp_machine_type),
-            'disk_size':    group.disk_size_gb | default(gcp_disk_size_gb) | int,
-            'disk_type':    group.disk_type    | default(gcp_disk_type),
-            'tags':         group.tags         | default([cluster_name ~ '-node', cluster_name ~ '-' ~ group.role])
+            'region':       group.get('region', 'MISSING-REGION'),
+            'subnet_cidr':  group.get('subnet_cidr', 'MISSING-CIDR'),
+            'machine_type': group.get('machine_type', gcp_machine_type),
+            'disk_size':    group.get('disk_size_gb', gcp_disk_size_gb) | int,
+            'disk_type':    group.get('disk_type', gcp_disk_type),
+            'tags':         group.get('tags', [cluster_name ~ '-node', cluster_name ~ '-' ~ group.role])
           }) -%}
         {%- endfor -%}
       {%- endfor -%}
       {{ vms }}
 
-- name: Show VM plan
+- name: Validate and show VM plan
   debug:
     msg: |
       📋 VM plan ({{ all_vm_definitions | length }} total):
       {% for vm in all_vm_definitions %}
-        [{{ vm.role | upper }}] {{ vm.name }}  zone={{ vm.zone }}  type={{ vm.machine_type }}
+        [{{ vm.role | upper }}] {{ vm.name }}  zone={{ vm.zone }}  type={{ vm.machine_type }}  subnet={{ gcp_subnet }}-{{ vm.region }}
       {% endfor %}
+  failed_when: >-
+    all_vm_definitions | selectattr('region', 'equalto', 'MISSING-REGION') | list | length > 0
+    or
+    all_vm_definitions | selectattr('subnet_cidr', 'equalto', 'MISSING-CIDR') | list | length > 0
 
-# ── Create ALL VMs in one loop ────────────────────────────────────
+# ── Create ALL VMs ────────────────────────────────────────────────
 - name: Create all cluster VMs
   google.cloud.gcp_compute_instance:
     name: "{{ item.name }}"
     machine_type: "{{ item.machine_type }}"
     zone: "{{ item.zone }}"
-    tags:
-      items: "{{ item.tags }}"
     disks:
       - auto_delete: true
         boot: true
         initialize_params:
           source_image: "projects/{{ gcp_image_project }}/global/images/family/{{ gcp_image_family }}"
           disk_size_gb: "{{ item.disk_size }}"
-          disk_type: "projects/{{ gcp_project }}/zones/{{ item.zone }}/diskTypes/{{ item.disk_type }}"
+          disk_type: "{{ item.disk_type | default(gcp_disk_type) }}"
     network_interfaces:
       - network: "{{ gcp_network_result }}"
-        subnetwork: "{{ gcp_subnet_result }}"
+        subnetwork: "{{ subnet_by_region[item.region] }}"  # registered object — carries selfLink internally
         access_configs:
           - name: External NAT
             type: ONE_TO_ONE_NAT
     metadata:
       ssh-keys: "{{ ssh_user }}:{{ ssh_pub_key }}"
       startup-script: "{{ lookup('template', '../../templates/startup-script.sh.j2') }}"
-    project: "{{ gcp_project }}"
+    tags:
+      items: "{{ item.tags }}"
+    project: "{{ gcp_project_id }}"
     auth_kind: serviceaccount
-    service_account_file: "{{ gcp_service_account }}"
+    service_account_file: "{{ service_account_file }}"
     state: present
   loop: "{{ all_vm_definitions }}"
   loop_control:
     label: "{{ item.name }} ({{ item.zone }})"
   register: vm_results
+  retries: 3          # ← retry up to 3 times
+  delay: 15           # ← wait 15s between retries
+  until: vm_results is not failed
 
 # ── Extract IPs ───────────────────────────────────────────────────
 - name: Wait for VMs to finish startup-script
@@ -173,6 +208,7 @@
           'name':        res.name,
           'role':        defn.role,
           'zone':        defn.zone,
+          'region':      defn.region,
           'external_ip': iface.accessConfigs[0].natIP | default(''),
           'internal_ip': iface.networkIP
         }) -%}
@@ -184,15 +220,15 @@
     msg: |
       ✅ GCP VMs ready ({{ node_info | length }} total):
       {% for node in node_info %}
-      [{{ node.role | upper | rjust(6) }}] {{ node.name | ljust(28) }}  ext={{ node.external_ip | ljust(16) }}  int={{ node.internal_ip }}
+      [{{ node.role | upper }}] {{ node.name }}  ext={{ node.external_ip }}  int={{ node.internal_ip }}
       {% endfor %}
 
 # ── Per-role IP facts ─────────────────────────────────────────────
 - name: Set per-role IP facts
   set_fact:
-    "{{ item.role }}_ips":          "{{ node_info | selectattr('role','equalto', item.role) | map(attribute='external_ip')  | list }}"
-    "{{ item.role }}_internal_ips": "{{ node_info | selectattr('role','equalto', item.role) | map(attribute='internal_ip') | list }}"
-    "{{ item.role }}_names":        "{{ node_info | selectattr('role','equalto', item.role) | map(attribute='name')        | list }}"
+    "{{ item.role }}_ips":          "{{ node_info | selectattr('role', 'equalto', item.role) | map(attribute='external_ip')  | list }}"
+    "{{ item.role }}_internal_ips": "{{ node_info | selectattr('role', 'equalto', item.role) | map(attribute='internal_ip') | list }}"
+    "{{ item.role }}_names":        "{{ node_info | selectattr('role', 'equalto', item.role) | map(attribute='name')        | list }}"
   loop: "{{ node_groups }}"
   loop_control:
     label: "{{ item.role }}"
@@ -201,12 +237,12 @@
 - name: Write dynamic hosts.ini
   template:
     src: "../../templates/dynamic-hosts.ini.j2"
-    dest: "inventory/hosts.ini"
+    dest: "../inventory/inventory.ini"
 
 - name: Write Kubespray hosts.yaml (for master1 to use)
   template:
     src: "../../templates/kubespray-hosts.yaml.j2"
-    dest: "inventory/kubespray-hosts.yaml"
+    dest: "../inventory/kubespray-hosts.yaml"
 
 - name: Refresh in-memory Ansible inventory
   meta: refresh_inventory
@@ -214,11 +250,11 @@
 # ── Wait for SSH ──────────────────────────────────────────────────
 - name: Wait for SSH on all nodes
   wait_for:
-    host:    "{{ item.external_ip }}"
-    port:    22
+    host: "{{ item.external_ip }}"
+    port: 22
     timeout: 300
-    state:   started
-    delay:   5
+    state: started
+    delay: 5
   loop: "{{ node_info }}"
   loop_control:
     label: "{{ item.name }} → {{ item.external_ip }}"

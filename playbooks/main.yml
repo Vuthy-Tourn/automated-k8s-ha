@@ -30,10 +30,9 @@
   tags: [provision, always]
   vars_files:
     - ../vars/all.yml
-    - ../vars/cloudflare_vars.yml
   tasks:
     - name: Include GCP provision tasks
-      include_tasks: tasks/create-gcp.yml
+      include_tasks: ./tasks/create-gcp.yml
 
 # ── STAGE 2: Prepare all 5 nodes ─────────────────────────────────
 - name: "STAGE 2 | Prepare all cluster nodes"

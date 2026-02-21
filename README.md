@@ -1,4 +1,5 @@
 # 🚀 HA Kubernetes Cluster — Full Automation
+
 ### GCP + Ansible + Kubespray + ArgoCD + K8s Dashboard + Cloudflare DNS
 
 ---
@@ -80,15 +81,15 @@ cp ~/Downloads/your-sa-key.json files/sa-key.json
 Edit **`group_vars/all.yml`** — minimum required changes:
 
 ```yaml
-gcp_project:          "your-actual-gcp-project-id"
-gcp_service_account:  "files/sa-key.json"
-gcp_region:           "us-central1"          # change if needed
-gcp_zone_masters:     "us-central1-a"
-gcp_zone_workers:     "us-central1-b"
+gcp_project_id: "your-actual-gcp-project-id"
+service_account_file: "files/sa-key.json"
+gcp_region: "us-central1" # change if needed
+gcp_zone_masters: "us-central1-a"
+gcp_zone_workers: "us-central1-b"
 
-cluster_name:         "ha-k8s"               # used as VM name prefix
+cluster_name: "ha-k8s" # used as VM name prefix
 
-cloudflare_zone:      "yourdomain.com"
+cloudflare_zone: "yourdomain.com"
 cloudflare_api_token: "your-cf-token"
 argocd_admin_password: "YourSecurePassword!"
 ```
@@ -98,6 +99,7 @@ argocd_admin_password: "YourSecurePassword!"
 Go to https://dash.cloudflare.com/profile/api-tokens → Create Token
 
 Permissions needed:
+
 - `Zone → DNS → Edit`
 - `Zone → Zone → Read`
 - Include: your specific zone
@@ -191,10 +193,10 @@ kubectl get pods -A
 kubectl get svc -A
 ```
 
-| App | URL | Login |
-|-----|-----|-------|
-| **K8s Dashboard** | `https://k8s-dashboard.example.com` | Token from `kubeconfig/dashboard-token.txt` |
-| **ArgoCD** | `https://argocd.example.com` | `admin` / value from `argocd_admin_password` |
+| App               | URL                                 | Login                                        |
+| ----------------- | ----------------------------------- | -------------------------------------------- |
+| **K8s Dashboard** | `https://k8s-dashboard.example.com` | Token from `kubeconfig/dashboard-token.txt`  |
+| **ArgoCD**        | `https://argocd.example.com`        | `admin` / value from `argocd_admin_password` |
 
 ---
 
@@ -236,24 +238,24 @@ ansible-playbook teardown.yml
 
 ## ⏱️ Expected Timeline
 
-| Stage | Duration |
-|-------|----------|
-| GCP VM provisioning | 3–5 min |
-| Node preparation | 3–5 min |
-| Kubespray K8s install | 20–30 min |
-| Kubeconfig fetch | < 1 min |
-| ArgoCD + Dashboard | 3–5 min |
-| Cloudflare DNS | < 1 min |
-| **Total** | **~30–45 min** |
+| Stage                 | Duration       |
+| --------------------- | -------------- |
+| GCP VM provisioning   | 3–5 min        |
+| Node preparation      | 3–5 min        |
+| Kubespray K8s install | 20–30 min      |
+| Kubeconfig fetch      | < 1 min        |
+| ArgoCD + Dashboard    | 3–5 min        |
+| Cloudflare DNS        | < 1 min        |
+| **Total**             | **~30–45 min** |
 
 ---
 
 ## 🔒 GCP Firewall Summary
 
-| Rule | Ports | Source | Target |
-|------|-------|--------|--------|
-| allow-internal | ALL | `10.10.0.0/24` | all nodes |
-| allow-ssh | 22 | `0.0.0.0/0` | all nodes |
-| allow-k8s-api | 6443 | `0.0.0.0/0` | masters |
-| allow-http-https | 80, 443 | `0.0.0.0/0` | workers |
-| allow-nodeport | 30000-32767 | `0.0.0.0/0` | all nodes |
+| Rule             | Ports       | Source         | Target    |
+| ---------------- | ----------- | -------------- | --------- |
+| allow-internal   | ALL         | `10.10.0.0/24` | all nodes |
+| allow-ssh        | 22          | `0.0.0.0/0`    | all nodes |
+| allow-k8s-api    | 6443        | `0.0.0.0/0`    | masters   |
+| allow-http-https | 80, 443     | `0.0.0.0/0`    | workers   |
+| allow-nodeport   | 30000-32767 | `0.0.0.0/0`    | all nodes |
