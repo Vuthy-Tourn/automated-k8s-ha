@@ -10,7 +10,6 @@ ansible_ssh_extra_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/n
 ansible_python_interpreter=/usr/bin/python3
 
 # Kubernetes API exposed via Load Balancer
-kube_api_endpoint="{{ lb_ip_or_dns }}"
 kube_version="{{ kube_version }}"
 kube_network_plugin="calico"
 
@@ -41,9 +40,3 @@ kube_control_plane
 [k8s_cluster:children]
 kube_control_plane
 kube_node
-
-[calico_rr]
-
-# Optional: if you deploy HAProxy/Nginx LB manually
-# [lb]
-# lb1 ansible_host={{ lb_ip_or_dns }} ip={{ lb_ip_or_dns }}

@@ -8,7 +8,7 @@ setup-all:
     --vault-password-file ./secrets/vault_pass.txt
 
 create-machines:
-    ansible-playbook -i localhost, playbooks/main.yml --tags provision
+    ansible-playbook playbooks/main.yml --tags provision
     
 destroy-machines:
     ansible-playbook -i localhost playbooks/tasks/destroy-gcp-infrastructure.yml

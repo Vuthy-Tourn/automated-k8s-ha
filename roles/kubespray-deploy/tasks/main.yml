@@ -169,12 +169,12 @@
     owner: "{{ ssh_user }}"
     mode: '0644'
 
-# - name: Write k8s-cluster.yml
-#   template:
-#     src: k8s-cluster.yml.j2
-#     dest: "/home/{{ ssh_user }}/kubespray/inventory/sample/group_vars/k8s_cluster/k8s-cluster.yml"
-#     owner: "{{ ssh_user }}"
-#     mode: '0644'
+- name: Write k8s-cluster.yml
+  template:
+    src: k8s-cluster.yml.j2
+    dest: "/home/{{ ssh_user }}/kubespray/inventory/sample/group_vars/k8s_cluster/k8s-cluster.yml"
+    owner: "{{ ssh_user }}"
+    mode: '0644'
 
 # - name: Write Justfile
 #   template:
