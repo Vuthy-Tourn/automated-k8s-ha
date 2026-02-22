@@ -17,3 +17,4 @@ inventory/
 *.log
 __pycache__/
 .ansible/
+.venv/

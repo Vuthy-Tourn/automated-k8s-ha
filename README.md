@@ -9,12 +9,12 @@
 ```
 Your Local Machine (Ansible Controller)
 │
-├─ STAGE 1+2 ──► GCP API (service account)
+├─ STAGE 1+2 ──► GCP API (ADC or Service Account key)
 │                  Create VPC + Subnet + Firewall rules
 │                  Provision 5 VMs (Ubuntu 22.04, e2-standard-2)
 │                  ┌─────────────────────────────────────────┐
 │                  │  us-central1-a (masters zone)           │
-│                  │   ha-k8s-master-1  10.10.0.x  ◄─ kube-vip (10.10.0.100)
+│                  │   ha-k8s-master-1  10.10.0.x            │
 │                  │   ha-k8s-master-2  10.10.0.x            │
 │                  │   ha-k8s-master-3  10.10.0.x            │
 │                  │                                         │
@@ -63,31 +63,79 @@ pip3 install -r requirements.txt
 ansible-galaxy collection install -r requirements.yml
 ```
 
-### 2. GCP Service Account
+### 2. GCP Authentication
+
+This project supports **two authentication methods** for GCP. Both use the `adc_file` variable in `vars/all.yml` — just point it to the appropriate credentials file.
+
+Required IAM roles for whichever account is used:
+- `Compute Admin`
+- `Service Account User`
+
+---
+
+#### 🅐 Application Default Credentials (ADC) — recommended for local development
+
+**Option A1 — User credentials:**
 
 ```bash
-# In GCP Console → IAM → Service Accounts → Create
-# Grant these roles:
-#   Compute Admin
-#   Service Account User
-#   DNS Admin (if managing GCP DNS — we use Cloudflare here)
-
-# Download JSON key → save as:
-cp ~/Downloads/your-sa-key.json files/sa-key.json
+gcloud auth application-default login
 ```
+
+This generates a credentials file at `~/.config/gcloud/application_default_credentials.json`.
+
+**Option A2 — Service account impersonation:**
+
+```bash
+gcloud auth application-default login --impersonate-service-account=SA_EMAIL
+```
+
+**Then set in `vars/all.yml`:**
+
+```yaml
+adc_file: "~/.config/gcloud/application_default_credentials.json"
+```
+
+---
+
+#### 🅑 Service Account Key File — recommended for CI/CD or automation
+
+1. In GCP Console → **IAM & Admin → Service Accounts → Create Service Account**
+2. Grant the roles: `Compute Admin`, `Service Account User`
+3. Under the service account → **Keys → Add Key → Create new key → JSON**
+4. Download and save the key file:
+
+```bash
+cp ~/Downloads/your-sa-key.json credentials/sa-key.json
+```
+
+5. **Set in `vars/all.yml`:**
+
+```yaml
+adc_file: "credentials/sa-key.json"
+```
+
+> ⚠️ Never commit `credentials/sa-key.json` to version control. It is already listed in `.gitignore`.
+
+---
 
 ### 3. Configure Variables
 
-Edit **`group_vars/all.yml`** — minimum required changes:
+Edit **`vars/all.yml`** — minimum required changes:
 
 ```yaml
 gcp_project_id: "your-actual-gcp-project-id"
-service_account_file: "files/sa-key.json"
-gcp_region: "us-central1" # change if needed
+
+# GCP Authentication — choose ONE of the following:
+# Option A: Application Default Credentials (run: gcloud auth application-default login)
+adc_file: "~/.config/gcloud/application_default_credentials.json"
+# Option B: Service account key file
+# adc_file: "credentials/sa-key.json"
+
+gcp_region: "us-central1"        # change if needed
 gcp_zone_masters: "us-central1-a"
 gcp_zone_workers: "us-central1-b"
 
-cluster_name: "ha-k8s" # used as VM name prefix
+cluster_name: "ha-k8s"           # used as VM name prefix
 
 cloudflare_zone: "yourdomain.com"
 cloudflare_api_token: "your-cf-token"
@@ -155,8 +203,8 @@ k8s-gcp-automation/
 ├── requirements.txt                 ← 🐍 Python deps (pip install)
 ├── requirements.yml                 ← 📦 Ansible collections
 │
-├── credentials/                     ← 🔑 Secrets for GCP + SSH
-│   ├── service-account.json         ← 🗝 GCP service account key
+├── credentials/                     ← 🔑 Auth credentials + SSH keys
+│   ├── sa-key.json                  ← 🗝 GCP service account key (Option B — gitignored)
 │   ├── k8s-ssh-key                  ← 🔐 SSH private key (auto-generated)
 │   └── k8s-ssh-key.pub              ← 📬 SSH public key (auto-generated)
 │
@@ -210,10 +258,51 @@ k8s-gcp-automation/
 │   └── become_pass.yml               ← 🛡 Sudo password for remote hosts
 │
 └── vars/                             ← ✏️ Variables for all roles / environments
-    ├── all.yml                        ← 🏷 Global vars
+    ├── all.yml                        ← 🏷 Global vars (includes adc_file path)
     ├── cloudflare_vars.yml            ← 🌐 Cloudflare DNS vars
     └── secrets.yml                    ← 🔑 Vaulted secrets variables
 ```
+
+---
+
+## 🔐 GCP Authentication Details
+
+All GCP tasks reference the `adc_file` variable and pass it to `google.cloud.*` Ansible modules via `credentials_file`. The `auth_kind` is set based on which credential type you use:
+
+| Auth Method | `auth_kind` value | `adc_file` points to |
+|---|---|---|
+| ADC (user login) | `application` | `~/.config/gcloud/application_default_credentials.json` |
+| Service Account key | `serviceaccount` | `credentials/sa-key.json` |
+
+**Example task — ADC:**
+
+```yaml
+- name: Create GCP instance
+  google.cloud.gcp_compute_instance:
+    name: "{{ instance_name }}"
+    project: "{{ gcp_project_id }}"
+    zone: "{{ gcp_zone_masters }}"
+    auth_kind: application
+    credentials_file: "{{ adc_file }}"
+    ...
+```
+
+**Example task — Service Account key:**
+
+```yaml
+- name: Create GCP instance
+  google.cloud.gcp_compute_instance:
+    name: "{{ instance_name }}"
+    project: "{{ gcp_project_id }}"
+    zone: "{{ gcp_zone_masters }}"
+    auth_kind: serviceaccount
+    credentials_file: "{{ adc_file }}"
+    ...
+```
+
+> The `auth_kind` can also be set as a variable in `vars/all.yml` (e.g., `gcp_auth_kind: serviceaccount`) so you don't need to change individual tasks when switching between methods.
+
+> If using ADC, verify your credentials are valid with: `gcloud auth application-default print-access-token`
 
 ---
 
@@ -245,7 +334,7 @@ ansible all -m ping -i inventory/hosts.ini
 ansible-playbook site.yml -vvv
 
 # Check Kubespray log on master1
-ssh -i files/k8s-ssh-key ubuntu@<master1-ip> \
+ssh -i credentials/k8s-ssh-key ubuntu@<master1-ip> \
   "tail -100 ~/kubespray-install.log"
 
 # Check cluster events
@@ -260,6 +349,13 @@ kubectl get pods -n argocd
 
 # Re-run only failed stage
 ansible-playbook site.yml --tags apps
+
+# Verify ADC credentials are valid
+gcloud auth application-default print-access-token
+
+# Verify service account key is valid
+gcloud auth activate-service-account --key-file=credentials/sa-key.json
+gcloud auth print-access-token
 ```
 
 ## 💣 Teardown
