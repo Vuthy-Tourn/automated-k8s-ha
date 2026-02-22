@@ -9,8 +9,8 @@
 #   4. Install system dependencies on master1
 #   5. Clone Kubespray
 #   6. pip install requirements into venv
-#   7. Write inventory, addons.yml, k8s-cluster.yml, Justfile
-#   8. Run cluster.yml
+#   7. Write inventory, addons.yml, k8s-cluster.yml
+#   8. Run cluster.yml (backgrounded via nohup, polled every 30s)
 #   9. Set up kubectl
 # ================================================================
 
@@ -64,6 +64,8 @@
   args:
     executable: /bin/bash
   loop: "{{ groups['all'] }}"
+  loop_control:
+    label: "{{ item }}"
   changed_when: true
 
 # ── Step 4: Install system dependencies on master1 ───────────────
@@ -77,20 +79,6 @@
       - rsync
     state: present
     update_cache: yes
-
-# - name: Install 'just' task runner if not present
-#   shell: |
-#     if ! command -v just >/dev/null 2>&1; then
-#       VERSION=$(curl -s https://api.github.com/repos/casey/just/releases/latest \
-#         | grep tag_name | cut -d '"' -f4)
-#       curl -L "https://github.com/casey/just/releases/download/${VERSION}/just-${VERSION}-x86_64-unknown-linux-musl.tar.gz" \
-#         -o /tmp/just.tar.gz
-#       tar -xzf /tmp/just.tar.gz -C /usr/local/bin just
-#       chmod +x /usr/local/bin/just
-#     fi
-#   args:
-#     executable: /bin/bash
-#   changed_when: false
 
 # ── Step 5: Clone Kubespray ───────────────────────────────────────
 - name: Remove existing Kubespray folder if present
@@ -144,15 +132,20 @@
   changed_when: false
 
 # ── Step 7: Write inventory and config files ──────────────────────
-- name: Copy node_info.json to remote host
+- name: Copy node_info.json to master1
   copy:
     src: ../inventory/node_info.json
     dest: /tmp/node_info.json
   become: true
 
-- name: Load node_info from file on remote host
+- name: Read node_info.json from master1
+  slurp:
+    src: /tmp/node_info.json
+  register: _node_info_raw
+
+- name: Set node_info fact
   set_fact:
-    node_info: "{{ lookup('file', '/tmp/node_info.json') | from_json }}"
+    node_info: "{{ _node_info_raw.content | b64decode | from_json }}"
   when: node_info is not defined
 
 - name: Write inventory/sample/inventory.ini with real node IPs
@@ -176,46 +169,89 @@
     owner: "{{ ssh_user }}"
     mode: '0644'
 
-# - name: Write Justfile
-#   template:
-#     src: Justfile.j2
-#     dest: "/home/{{ ssh_user }}/kubespray/Justfile"
-#     owner: "{{ ssh_user }}"
-#     mode: '0755'
-
 # ── Step 8: Run cluster.yml ───────────────────────────────────────
-# Runs entirely on master1 — it SSHes to all other nodes internally
-# exit ${PIPESTATUS[0]} captures ansible-playbook exit code through tee pipe
-- name: Run Kubespray cluster.yml from master1 (35-50 min)
+# Launched via nohup so the process survives SSH disconnects.
+# async:60/poll:0 fires and forgets cleanly.
+# Polling loop reconnects every 30s to check /tmp/kubespray.pid.
+# Pass/fail is determined by reading PLAY RECAP in /tmp/kubespray.log.
+- name: Launch Kubespray cluster.yml in background on master1
   shell: |
     cd /home/{{ ssh_user }}/kubespray
     source venv/bin/activate
-    ansible-playbook -b -v -i inventory/sample/inventory.ini \
-    cluster.yml
-    exit ${PIPESTATUS[0]}
+    nohup ansible-playbook -b -v \
+      -i inventory/sample/inventory.ini \
+      cluster.yml \
+      > /tmp/kubespray.log 2>&1 &
+    echo $! > /tmp/kubespray.pid
+    echo "Kubespray launched with PID: $(cat /tmp/kubespray.pid)"
   args:
     executable: /bin/bash
-  timeout: 3600
-  register: kubespray_run
+  async: 60
+  poll: 0
 
-- name: Confirm Kubespray succeeded
-  fail:
-    msg: |
-      Kubespray failed — SSH to master1 and check:
-        tail -100 ~/kubespray-install.log
-  when: kubespray_run.failed is defined and kubespray_run.failed
+- name: Wait for Kubespray to complete (polls every 30s, max 60 min)
+  shell: |
+    pid=$(cat /tmp/kubespray.pid 2>/dev/null)
+    if [ -z "$pid" ]; then
+      echo "ERROR: PID file not found"
+      exit 1
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "RUNNING"
+      exit 99
+    fi
+    if grep -q "PLAY RECAP" /tmp/kubespray.log; then
+      if grep -E "failed=[1-9]|unreachable=[1-9]" /tmp/kubespray.log > /dev/null 2>&1; then
+        echo "FAILED"
+        exit 1
+      fi
+      echo "SUCCESS"
+      exit 0
+    else
+      echo "FAILED - no PLAY RECAP found in log"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  register: _kubespray_poll
+  until: _kubespray_poll.rc != 99
+  retries: 120    # 120 × 30s = 60 min max
+  delay: 30
+  failed_when: _kubespray_poll.rc == 1
+
+- name: Show last 80 lines of Kubespray log
+  shell: tail -80 /tmp/kubespray.log
+  args:
+    executable: /bin/bash
+  register: _kubespray_tail
+  changed_when: false
+
+- name: Print Kubespray log tail
+  debug:
+    msg: "{{ _kubespray_tail.stdout_lines }}"
+
+- name: Confirm Kubespray PLAY RECAP shows no failures
+  shell: |
+    grep "PLAY RECAP" /tmp/kubespray.log -A 20 | \
+    grep -E "failed=[1-9]|unreachable=[1-9]"
+  args:
+    executable: /bin/bash
+  register: _recap_check
+  failed_when: _recap_check.rc == 0   # rc=0 means grep FOUND failures
+  changed_when: false
 
 # ── Step 9: Set up kubectl on master1 ────────────────────────────
 - name: Verify admin.conf was created by Kubespray
   stat:
     path: /etc/kubernetes/admin.conf
+  become: yes
   register: admin_conf
 
 - name: Fail clearly if admin.conf is missing
   fail:
     msg: >
       /etc/kubernetes/admin.conf not found — Kubespray did not complete.
-      Check: tail -100 ~/kubespray-install.log
+      Check: tail -100 /tmp/kubespray.log
   when: not admin_conf.stat.exists
 
 - name: Create ~/.kube directory for {{ ssh_user }}
@@ -234,6 +270,7 @@
     owner: "{{ ssh_user }}"
     group: "{{ ssh_user }}"
     mode: '0600'
+  become: yes
 
 - name: Verify cluster is healthy
   command: kubectl get nodes -o wide

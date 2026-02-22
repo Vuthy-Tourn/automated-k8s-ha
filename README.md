@@ -14,7 +14,7 @@ Your Local Machine (Ansible Controller)
 │                  Provision 5 VMs (Ubuntu 22.04, e2-standard-2)
 │                  ┌─────────────────────────────────────────┐
 │                  │  us-central1-a (masters zone)           │
-│                  │   ha-k8s-master-1  10.10.0.x  ◄─ kube-vip (10.10.0.100)
+│                  │   ha-k8s-master-1  10.10.0.x            │
 │                  │   ha-k8s-master-2  10.10.0.x            │
 │                  │   ha-k8s-master-3  10.10.0.x            │
 │                  │                                         │
