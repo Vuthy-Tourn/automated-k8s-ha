@@ -1,35 +1,98 @@
 ---
 # ================================================================
 # Kubespray k8s-cluster group vars
-# File: inventory/sample/group_vars/k8s_cluster/k8s-cluster.yml
 # ================================================================
 
+# Kubernetes version
 kube_version: "{{ kube_version }}"
+
+# Network configuration
 kube_network_plugin: "{{ kube_network_plugin }}"
 cluster_name: "{{ cluster_name }}.local"
 
+# Subnets
 kube_pods_subnet: "{{ kube_pod_subnet }}"
 kube_service_addresses: "{{ kube_service_subnet }}"
 
+# Container runtime
 container_manager: containerd
 
+# HA Control Plane with kube-vip
 kube_vip_enabled: true
 kube_vip_controlplane_enabled: true
 kube_vip_address: "{{ kube_vip_address }}"
+kube_vip_interface: eth0
+kube_vip_arp_enabled: true
+
 loadbalancer_apiserver:
   address: "{{ kube_vip_address }}"
   port: 6443
 
-# API server cert SANs — VIP + all master IPs (populated from node_info)
+# API server certificate SANs
 supplementary_addresses_in_ssl_keys:
   - "{{ kube_vip_address }}"
-{% for node in node_info | selectattr('role', 'equalto', 'master') | list %}
-  - "{{ node.external_ip }}"
-  - "{{ node.internal_ip }}"
+  - "127.0.0.1"
+  - "localhost"
+{% if node_info is defined and node_info.all is defined and node_info.all.hosts is defined %}
+{% for host, host_vars in node_info.all.hosts.items() %}
+  - "{{ host_vars.ip }}"
+  {% if host_vars.external_ip is defined %}
+  - "{{ host_vars.external_ip }}"
+  {% endif %}
+  - "{{ host }}"
 {% endfor %}
+{% endif %}
 
+# DNS configuration
 dns_mode: coredns
 enable_nodelocaldns: true
+nodelocaldns_ip: 169.254.25.10
+
+# kube-proxy settings
 kube_proxy_strict_arp: true
+kube_proxy_mode: iptables
+
+# Security
 kubernetes_audit: true
 rbac_enabled: true
+
+# etcd configuration
+etcd_deployment_type: docker
+etcd_kubeadm_enabled: true
+
+# Container runtime settings
+containerd_registries:
+  - "docker.io"
+  - "quay.io"
+  - "gcr.io"
+
+# kubelet settings
+kubelet_rotate_certificates: true
+kubelet_authorization_mode_webhook: true
+
+# Feature gates
+kube_feature_gates:
+  - "VolumeSnapshotDataSource=true"
+  - "CSINodeInfo=true"
+  - "CSIDriverRegistry=true"
+
+# Metrics
+metrics_server_enabled: true
+metrics_server_kubelet_insecure_tls: true
+
+# Calico specific settings (if using calico)
+{% if kube_network_plugin == 'calico' %}
+calico_ip_auto_method: "interface=eth0"
+calico_ipam_host_local: false
+calico_mtu: 1440
+calico_network_backend: bird
+calico_felix_logseverity: "Info"
+calico_ipv4_pool_cidr: "{{ kube_pod_subnet }}"
+calico_ipv4_pool_ipip: Always
+calico_ipv4_pool_nat_outgoing: true
+{% endif %}
+
+# Node settings
+kubelet_node_addresses: []
+node_labels: {}
+node_taints: []

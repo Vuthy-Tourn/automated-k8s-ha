@@ -2,18 +2,41 @@
 # ================================================================
 # KUBESPRAY DEPLOY — runs on master1 only
 #
-# Mirrors the exact manual steps:
-#   1. git clone kubespray
-#   2. rm -rf .git .github .gitlab-ci
-#   3. pip install -r requirements.txt
-#   4. Write inventory/sample/inventory.ini  (real IPs injected)
-#   5. Write addons.yml
-#   6. Write Justfile
-#   7. ansible-playbook cluster.yml  (master1 → all nodes internally)
-#   8. Set up kubectl for ssh_user on master1 (no local pull)
+# Steps:
+#   1. Authorize SSH public key on ALL nodes (so master1 can reach them)
+#   2. Push SSH private key to master1
+#   3. Scan host keys on master1
+#   4. Install system dependencies on master1
+#   5. Clone Kubespray
+#   6. pip install requirements into venv
+#   7. Write inventory, addons.yml, k8s-cluster.yml, Justfile
+#   8. Run cluster.yml
+#   9. Set up kubectl
 # ================================================================
 
-# ── Push SSH key so master1 can reach all other nodes ────────────
+# ── Step 1: Authorize public key on ALL nodes ─────────────────────
+# master1 SSHes to all other nodes during cluster.yml — every node
+# must trust the cluster key, not just master1
+- name: Authorize cluster SSH public key on all nodes
+  authorized_key:
+    user: "{{ ssh_user }}"
+    key: "{{ lookup('file', ssh_public_key) }}"
+    state: present
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['all'] }}"
+  loop_control:
+    label: "{{ item }}"
+
+# ── Step 2: Push SSH key to master1 ──────────────────────────────
+# master1 needs the private key to initiate SSH connections to other nodes
+- name: Ensure .ssh directory exists on master1
+  file:
+    path: "/home/{{ ssh_user }}/.ssh"
+    state: directory
+    owner: "{{ ssh_user }}"
+    group: "{{ ssh_user }}"
+    mode: '0700'
+
 - name: Push cluster SSH private key to master1
   copy:
     src: "{{ ssh_private_key }}"
@@ -30,17 +53,21 @@
     group: "{{ ssh_user }}"
     mode: '0644'
 
+# ── Step 3: Scan host keys on master1 ────────────────────────────
+# Prevents "host key verification failed" when master1 SSHes to other nodes
 - name: Scan and register all node host keys on master1
   shell: |
     ssh-keyscan -t rsa {{ hostvars[item]['ip'] }} \
       >> /home/{{ ssh_user }}/.ssh/known_hosts 2>/dev/null
     sort -u /home/{{ ssh_user }}/.ssh/known_hosts \
       -o /home/{{ ssh_user }}/.ssh/known_hosts
+  args:
+    executable: /bin/bash
   loop: "{{ groups['all'] }}"
   changed_when: true
 
-# ── Install system deps on master1 ───────────────────────────────
-- name: Install git, pip, rsync on master1
+# ── Step 4: Install system dependencies on master1 ───────────────
+- name: Install git, pip, venv, rsync on master1
   apt:
     name:
       - git
@@ -51,31 +78,41 @@
     state: present
     update_cache: yes
 
-- name: Install 'just' from GitHub releases if not installed
-  shell: |
-    if ! command -v just >/dev/null 2>&1; then
-      VERSION=$(curl -s https://api.github.com/repos/casey/just/releases/latest | grep tag_name | cut -d '"' -f4)
-      curl -L https://github.com/casey/just/releases/download/${VERSION}/just-${VERSION}-x86_64-unknown-linux-musl.tar.gz \
-        -o /tmp/just.tar.gz
-      tar -xzf /tmp/just.tar.gz -C /usr/local/bin just
-      chmod +x /usr/local/bin/just
-    fi
-  args:
-    executable: /bin/bash
-  changed_when: true
+# - name: Install 'just' task runner if not present
+#   shell: |
+#     if ! command -v just >/dev/null 2>&1; then
+#       VERSION=$(curl -s https://api.github.com/repos/casey/just/releases/latest \
+#         | grep tag_name | cut -d '"' -f4)
+#       curl -L "https://github.com/casey/just/releases/download/${VERSION}/just-${VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+#         -o /tmp/just.tar.gz
+#       tar -xzf /tmp/just.tar.gz -C /usr/local/bin just
+#       chmod +x /usr/local/bin/just
+#     fi
+#   args:
+#     executable: /bin/bash
+#   changed_when: false
 
-# ── Step 1: Clone Kubespray ───────────────────────────────────────
+# ── Step 5: Clone Kubespray ───────────────────────────────────────
+- name: Remove existing Kubespray folder if present
+  file:
+    path: "/home/{{ ssh_user }}/kubespray"
+    state: absent
+
 - name: Clone Kubespray {{ kubespray_version }}
   git:
     repo: "{{ kubespray_repo }}"
-    dest: "/home/{{ ssh_user }}/kubespray"
     version: "{{ kubespray_version }}"
-    update: yes       # pull changes if already cloned
+    dest: "/home/{{ ssh_user }}/kubespray"
     force: yes
-  become_user: "{{ ssh_user }}"
 
-# ── Step 2: Remove unneeded git/CI dirs ──────────────────────────
-- name: Remove .git .github .gitlab-ci from kubespray
+- name: Set correct ownership on kubespray folder
+  file:
+    path: "/home/{{ ssh_user }}/kubespray"
+    owner: "{{ ssh_user }}"
+    group: "{{ ssh_user }}"
+    recurse: yes
+
+- name: Remove unneeded git/CI directories
   file:
     path: "/home/{{ ssh_user }}/kubespray/{{ item }}"
     state: absent
@@ -84,30 +121,40 @@
     - .github
     - .gitlab-ci.yml
 
-# ── Step 3: pip install -r requirements.txt ───────────────────────
+# ── Step 6: pip install into venv ────────────────────────────────
 - name: Create Python venv for Kubespray
   command: python3 -m venv /home/{{ ssh_user }}/kubespray/venv
   args:
     creates: "/home/{{ ssh_user }}/kubespray/venv/bin/activate"
-  become_user: "{{ ssh_user }}"
 
-- name: pip install -r requirements.txt (inside venv)
-  pip:
-    requirements: "/home/{{ ssh_user }}/kubespray/requirements.txt"
-    virtualenv:   "/home/{{ ssh_user }}/kubespray/venv"
-    state: present
+- name: pip install -r requirements.txt inside venv
+  shell: |
+    source /home/{{ ssh_user }}/kubespray/venv/bin/activate
+    pip install -r /home/{{ ssh_user }}/kubespray/requirements.txt
+  args:
+    executable: /bin/bash
+  changed_when: true
 
-- name: pip install extra packages needed
-  pip:
-    name:
-      - netaddr
-      - jmespath
-      - ruamel.yaml
-    virtualenv: "/home/{{ ssh_user }}/kubespray/venv"
+- name: pip install extra packages into venv
+  shell: |
+    source /home/{{ ssh_user }}/kubespray/venv/bin/activate
+    pip install netaddr jmespath ruamel.yaml
+  args:
+    executable: /bin/bash
+  changed_when: false
 
-# ── Step 4: Write inventory/sample/inventory.ini ─────────────────
-# Uses real internal IPs from node_info (populated by create-gcp.yml tasks)
-# master1 gets ansible_connection=local because it's running the playbook
+# ── Step 7: Write inventory and config files ──────────────────────
+- name: Copy node_info.json to remote host
+  copy:
+    src: ../inventory/node_info.json
+    dest: /tmp/node_info.json
+  become: true
+
+- name: Load node_info from file on remote host
+  set_fact:
+    node_info: "{{ lookup('file', '/tmp/node_info.json') | from_json }}"
+  when: node_info is not defined
+
 - name: Write inventory/sample/inventory.ini with real node IPs
   template:
     src: inventory.ini.j2
@@ -115,56 +162,62 @@
     owner: "{{ ssh_user }}"
     mode: '0644'
 
-# ── Step 5: Write addons.yml ──────────────────────────────────────
-- name: Write addons.yml (dashboard, helm, nginx, argocd, etc.)
+- name: Write addons.yml
   template:
     src: addons.yml.j2
     dest: "/home/{{ ssh_user }}/kubespray/inventory/sample/group_vars/k8s_cluster/addons.yml"
     owner: "{{ ssh_user }}"
     mode: '0644'
 
-- name: Write k8s-cluster.yml (cluster settings)
-  template:
-    src: k8s-cluster.yml.j2
-    dest: "/home/{{ ssh_user }}/kubespray/inventory/sample/group_vars/k8s_cluster/k8s-cluster.yml"
-    owner: "{{ ssh_user }}"
-    mode: '0644'
+# - name: Write k8s-cluster.yml
+#   template:
+#     src: k8s-cluster.yml.j2
+#     dest: "/home/{{ ssh_user }}/kubespray/inventory/sample/group_vars/k8s_cluster/k8s-cluster.yml"
+#     owner: "{{ ssh_user }}"
+#     mode: '0644'
 
-# ── Step 6: Write Justfile ────────────────────────────────────────
-- name: Write Justfile for reusable cluster commands
-  template:
-    src: Justfile.j2
-    dest: "/home/{{ ssh_user }}/kubespray/Justfile"
-    owner: "{{ ssh_user }}"
-    mode: '0755'
+# - name: Write Justfile
+#   template:
+#     src: Justfile.j2
+#     dest: "/home/{{ ssh_user }}/kubespray/Justfile"
+#     owner: "{{ ssh_user }}"
+#     mode: '0755'
 
-# ── Step 7: Run cluster.yml via Justfile / ansible-playbook ───────
-- name: Run Kubespray cluster.yml from master1 (20-35 min)
+# ── Step 8: Run cluster.yml ───────────────────────────────────────
+# Runs entirely on master1 — it SSHes to all other nodes internally
+# exit ${PIPESTATUS[0]} captures ansible-playbook exit code through tee pipe
+- name: Run Kubespray cluster.yml from master1 (35-50 min)
   shell: |
-    set -euo pipefail
     cd /home/{{ ssh_user }}/kubespray
     source venv/bin/activate
-
-    ansible-playbook -b -v \
-      -i inventory/sample/inventory.ini \
-      cluster.yml \
-      2>&1 | tee /home/{{ ssh_user }}/kubespray-install.log
-
-    echo "EXIT_CODE:$?"
-  become_user: "{{ ssh_user }}"
-  async: 7200
-  poll: 30
+    ansible-playbook -b -v -i inventory/sample/inventory.ini \
+    cluster.yml
+    exit ${PIPESTATUS[0]}
+  args:
+    executable: /bin/bash
+  timeout: 3600
   register: kubespray_run
 
 - name: Confirm Kubespray succeeded
   fail:
     msg: |
-      Kubespray failed!
-      SSH to master1 and check: tail -100 ~/kubespray-install.log
-  when: kubespray_run.rc is defined and kubespray_run.rc != 0
+      Kubespray failed — SSH to master1 and check:
+        tail -100 ~/kubespray-install.log
+  when: kubespray_run.failed is defined and kubespray_run.failed
 
-# ── Step 8: Set up kubectl for ssh_user on master1 ───────────────
-# (no kubeconfig pulled to local — kubectl lives on master1)
+# ── Step 9: Set up kubectl on master1 ────────────────────────────
+- name: Verify admin.conf was created by Kubespray
+  stat:
+    path: /etc/kubernetes/admin.conf
+  register: admin_conf
+
+- name: Fail clearly if admin.conf is missing
+  fail:
+    msg: >
+      /etc/kubernetes/admin.conf not found — Kubespray did not complete.
+      Check: tail -100 ~/kubespray-install.log
+  when: not admin_conf.stat.exists
+
 - name: Create ~/.kube directory for {{ ssh_user }}
   file:
     path: "/home/{{ ssh_user }}/.kube"
@@ -182,9 +235,8 @@
     group: "{{ ssh_user }}"
     mode: '0600'
 
-- name: Verify cluster is healthy from master1
+- name: Verify cluster is healthy
   command: kubectl get nodes -o wide
-  become_user: "{{ ssh_user }}"
   environment:
     KUBECONFIG: "/home/{{ ssh_user }}/.kube/config"
   register: kubectl_nodes
@@ -195,9 +247,6 @@
 - name: Show cluster node status
   debug:
     msg: |
-      ✅ Cluster is up! Run from master1:
-
-        kubectl get nodes -o wide
-        kubectl get pods -A
+      ✅ Cluster is up!
 
       {{ kubectl_nodes.stdout }}

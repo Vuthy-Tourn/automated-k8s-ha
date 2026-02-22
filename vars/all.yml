@@ -113,9 +113,10 @@ ssh_private_key: "/Users/macbookpro/Desktop/k8s-gcp-automation/credentials/k8s-s
 ssh_public_key:  "/Users/macbookpro/Desktop/k8s-gcp-automation/credentials/k8s-ssh-key.pub"
 
 # ── Kubernetes ────────────────────────────────────────────────────
-kubespray_version: "v2.24.0"
+kubespray_version: "v2.29.0"
 kubespray_repo: "https://github.com/kubernetes-sigs/kubespray"
-kube_version: "v1.29.3"
+kube_version: "1.33.5"
+lb_ip_or_dns:  "lb.k8s.example.com"
 kube_network_plugin: "calico"
 kube_pod_subnet: "192.168.0.0/17"
 kube_service_subnet: "192.168.128.0/17"

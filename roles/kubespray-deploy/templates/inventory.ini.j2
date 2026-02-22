@@ -5,18 +5,24 @@
 
 [all:vars]
 ansible_user={{ ssh_user }}
+ansible_ssh_private_key_file=/home/{{ ssh_user }}/.ssh/id_rsa
 ansible_ssh_extra_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
 ansible_python_interpreter=/usr/bin/python3
 
+# Kubernetes API exposed via Load Balancer
+kube_api_endpoint="{{ lb_ip_or_dns }}"
+kube_version="{{ kube_version }}"
+kube_network_plugin="calico"
+
 # ── Control Plane (masters) ───────────────────────────────────────
 [kube_control_plane]
-{% set masters = node_groups | selectattr('role', 'equalto', 'master') | list %}
+{% set masters = node_info | selectattr('role', 'equalto', 'master') | list %}
 {% for node in masters %}
 {% if loop.first %}
 # master1 uses ansible_connection=local — it IS the node running ansible-playbook
-{{ node.name }} ansible_host={{ node.internal_ip }} ansible_connection=local
+{{ node.name }} ansible_host={{ node.internal_ip }} ip={{ node.internal_ip }} ansible_connection=local
 {% else %}
-{{ node.name }} ansible_host={{ node.internal_ip }}
+{{ node.name }} ansible_host={{ node.internal_ip }} ip={{ node.internal_ip }}
 {% endif %}
 {% endfor %}
 
@@ -28,10 +34,16 @@ kube_control_plane
 [kube_node]
 {% set workers = node_info | selectattr('role', 'equalto', 'worker') | list %}
 {% for node in workers %}
-{{ node.name }} ansible_host={{ node.internal_ip }}
+{{ node.name }} ansible_host={{ node.internal_ip }} ip={{ node.internal_ip }}
 {% endfor %}
 
 # ── Cluster group ─────────────────────────────────────────────────
 [k8s_cluster:children]
 kube_control_plane
 kube_node
+
+[calico_rr]
+
+# Optional: if you deploy HAProxy/Nginx LB manually
+# [lb]
+# lb1 ansible_host={{ lb_ip_or_dns }} ip={{ lb_ip_or_dns }}

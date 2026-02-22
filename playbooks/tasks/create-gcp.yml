@@ -224,6 +224,11 @@
       {%- endfor -%}
       {{ nodes }}
 
+- name: Save node_info to file
+  copy:
+    content: "{{ node_info | to_nice_json }}"
+    dest: "../inventory/node_info.json"
+
 - name: Display provisioned VMs
   debug:
     msg: |
