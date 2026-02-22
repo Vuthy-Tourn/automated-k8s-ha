@@ -301,11 +301,11 @@ ansible-playbook main.yml --tags apps
 gcloud auth application-default print-access-token
 ```
 
-## 💣 Teardown
+## 💣 Destroy
 
 ```bash
 # Destroys all GCP VMs, network, firewall rules
-ansible-playbook teardown.yml
+ansible-playbook tasks/destroy-gcp.yml
 ```
 
 ---
