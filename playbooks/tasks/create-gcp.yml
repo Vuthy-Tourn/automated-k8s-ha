@@ -125,6 +125,21 @@
     service_account_file: "{{ service_account_file }}"
     state: present
 
+- name: Allow internal Kubernetes communication
+  google.cloud.gcp_compute_firewall:
+    name: "{{ gcp_network }}-allow-k8s-internal"
+    network: "{{ gcp_network_result }}"
+    allowed:
+      - ip_protocol: tcp
+        ports:
+          - "6443"
+          - "2379-2380"
+          - "10250-10255"
+          - "179"
+    source_ranges:
+      - "10.10.0.0/16"
+    state: present
+
 # ── Build flat VM list ────────────────────────────────────────────
 - name: Build flat VM definition list from node_groups
   set_fact:
