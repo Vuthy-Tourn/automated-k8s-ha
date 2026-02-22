@@ -148,36 +148,71 @@ ansible-playbook site.yml --skip-tags provision
 ```
 k8s-gcp-automation/
 │
-├── site.yml                        ← 🎯 Run this (full pipeline)
-├── teardown.yml                    ← 💣 Destroy everything on GCP
-├── ansible.cfg                     ← Ansible settings
-├── requirements.txt                ← Python deps (pip install)
-├── requirements.yml                ← Ansible collections
+├── README.md                       ← 📝 Project overview / instructions
+├── ansible.cfg                     ← ⚙️ Ansible configuration
+├── auto_push.sh                     ← 🔄 Helper script to push changes or run plays
+├── Justfile                         ← 🛠 Automation helper via just
+├── requirements.txt                 ← 🐍 Python deps (pip install)
+├── requirements.yml                 ← 📦 Ansible collections
 │
-├── group_vars/
-│   └── all.yml                     ← ✏️  ALL CONFIG LIVES HERE
+├── credentials/                     ← 🔑 Secrets for GCP + SSH
+│   ├── service-account.json         ← 🗝 GCP service account key
+│   ├── k8s-ssh-key                  ← 🔐 SSH private key (auto-generated)
+│   └── k8s-ssh-key.pub              ← 📬 SSH public key (auto-generated)
 │
-├── inventory/                      ← Auto-generated, do not edit
-│   ├── hosts.ini                   ← Written after GCP provision
-│   └── kubespray-hosts.yaml        ← Written after GCP provision
+├── inventory/                       ← 📋 Auto-generated inventory, do not edit manually
+│   ├── inventory.ini                 ← 🖥 Nodes & IPs (dynamic hosts)
+│   ├── kubespray-hosts.yaml          ← 🏗 Kubespray inventory YAML
+│   └── node_info.json                ← 🌐 Node info (internal/external IPs, roles)
 │
-├── files/
-│   ├── sa-key.json                 ← GCP service account key (you add)
-│   ├── k8s-ssh-key                 ← Auto-generated SSH private key
-│   └── k8s-ssh-key.pub             ← Auto-generated SSH public key
+├── playbooks/                        ← 📜 Main playbooks
+│   ├── main.yml                      ← ▶️ Entry point (run Kubespray deploy / orchestration)
+│   └── tasks/
+│       ├── create-gcp.yml            ← ☁️ GCP VM provisioning
+│       └── destroy-gcp.yml           ← ❌ Tear down all GCP infrastructure
 │
-├── kubeconfig/                     ← Written after cluster install
-│   ├── admin.conf                  ← kubectl config
-│   └── dashboard-token.txt         ← K8s Dashboard login token
+├── templates/                        ← 📄 Templates for dynamic files
+│   ├── dynamic-hosts.ini.j2          ← 🖥 Jinja template for dynamic inventory.ini
+│   ├── kubespray-hosts.yaml.j2       ← 🏗 Jinja template for Kubespray hosts.yaml
+│   └── startup-script.sh.j2          ← ⚡ Startup script run on VM boot
 │
-└── roles/
-    ├── gcp-provision/              ← Create VMs + write inventory
-    ├── prepare-nodes/              ← OS prep on all 5 nodes
-    ├── kubespray-deploy/           ← master1 runs Kubespray
-    ├── fetch-kubeconfig/           ← Pull kubeconfig to local
-    ├── argocd/                     ← Install ArgoCD
-    ├── k8s-dashboard/              ← Install K8s Dashboard
-    └── cloudflare-dns/             ← Create DNS records
+├── roles/                            ← 🎛 Ansible roles
+│   ├── kubespray-deploy/             ← 🏗 Master1 runs Kubespray cluster deployment
+│   │   ├── tasks/
+│   │   │   └── main.yml              ← ▶️ Role tasks
+│   │   └── templates/
+│   │       ├── Justfile.j2           ← 🛠 Justfile template for Kubespray
+│   │       ├── addons.yml.j2         ← ➕ Optional addons manifest
+│   │       ├── etcd.yml.j2           ← 🗄 ETCD manifest template
+│   │       ├── inventory.ini.j2      ← 🖥 Dynamic inventory template
+│   │       └── k8s-cluster.yml.j2    ← 🏗 Cluster YAML template
+│   ├── prepare-nodes/                ← 🖥 Prepare OS / dependencies on all nodes
+│   │   └── tasks/
+│   │       └── main.yml
+│   ├── argocd/                       ← 🚀 Install ArgoCD
+│   │   ├── tasks/
+│   │   │   └── main.yml
+│   │   └── templates/
+│   │       ├── argocd-ingress.yaml.j2
+│   │       └── argocd-nodeport.yaml.j2
+│   ├── k8s-dashboard/                ← 🖥 Install Kubernetes Dashboard
+│   │   ├── tasks/
+│   │   │   └── main.yml
+│   │   └── templates/
+│   │       ├── dashboard-admin.yaml.j2
+│   │       └── dashboard-ingress.yaml.j2
+│   └── cloudflare-dns/               ← 🌐 Create DNS records via Cloudflare
+│       └── tasks/
+│           └── main.yml
+│
+├── secrets/                          ← 🔒 Vault / become password storage
+│   ├── vault_pass.txt                ← 🗝 Vault password
+│   └── become_pass.yml               ← 🛡 Sudo password for remote hosts
+│
+└── vars/                             ← ✏️ Variables for all roles / environments
+    ├── all.yml                        ← 🏷 Global vars
+    ├── cloudflare_vars.yml            ← 🌐 Cloudflare DNS vars
+    └── secrets.yml                    ← 🔑 Vaulted secrets variables
 ```
 
 ---
