@@ -9,7 +9,7 @@
 ```
 Your Local Machine (Ansible Controller)
 │
-├─ STAGE 1+2 ──► GCP API (service account)
+├─ STAGE 1+2 ──► GCP API (Application Default Credentials)
 │                  Create VPC + Subnet + Firewall rules
 │                  Provision 5 VMs (Ubuntu 22.04, e2-standard-2)
 │                  ┌─────────────────────────────────────────┐
@@ -53,7 +53,7 @@ Your Local Machine (Ansible Controller)
 
 ## ⚡ Quick Start
 
-### 1. Prerequisites
+### 1. Prerequimains
 
 ```bash
 # Install Python dependencies
@@ -63,31 +63,47 @@ pip3 install -r requirements.txt
 ansible-galaxy collection install -r requirements.yml
 ```
 
-### 2. GCP Service Account
+### 2. GCP Authentication — Application Default Credentials (ADC)
+
+This project uses **Application Default Credentials (ADC)** via `adc_file` for GCP authentication — no service account JSON key is required.
+
+**Option A — User credentials (recommended for local development):**
 
 ```bash
-# In GCP Console → IAM → Service Accounts → Create
-# Grant these roles:
-#   Compute Admin
-#   Service Account User
-#   DNS Admin (if managing GCP DNS — we use Cloudflare here)
-
-# Download JSON key → save as:
-cp ~/Downloads/your-sa-key.json files/sa-key.json
+gcloud auth application-default login
 ```
+
+This generates a credentials file at `~/.config/gcloud/application_default_credentials.json`.
+
+**Option B — Service account impersonation:**
+
+```bash
+gcloud auth application-default login --impersonate-service-account=SA_EMAIL
+```
+
+**Then set the path in `vars/all.yml`:**
+
+```yaml
+# Point adc_file to your ADC credentials file
+adc_file: "~/.config/gcloud/application_default_credentials.json"
+```
+
+> **Note:** The account or service account used must have the following IAM roles:
+> - `Compute Admin`
+> - `Service Account User`
 
 ### 3. Configure Variables
 
-Edit **`group_vars/all.yml`** — minimum required changes:
+Edit **`vars/all.yml`** — minimum required changes:
 
 ```yaml
 gcp_project_id: "your-actual-gcp-project-id"
-service_account_file: "files/sa-key.json"
-gcp_region: "us-central1" # change if needed
+adc_file: "~/.config/gcloud/application_default_credentials.json"  # path to ADC credentials
+gcp_region: "us-central1"        # change if needed
 gcp_zone_masters: "us-central1-a"
 gcp_zone_workers: "us-central1-b"
 
-cluster_name: "ha-k8s" # used as VM name prefix
+cluster_name: "ha-k8s"           # used as VM name prefix
 
 cloudflare_zone: "yourdomain.com"
 cloudflare_api_token: "your-cf-token"
@@ -108,7 +124,7 @@ Permissions needed:
 
 ```bash
 # Full pipeline — one command, ~35-45 minutes total
-ansible-playbook site.yml
+ansible-playbook main.yml
 ```
 
 ---
@@ -117,28 +133,28 @@ ansible-playbook site.yml
 
 ```bash
 # Stage 1+2: Provision GCP VMs only
-ansible-playbook site.yml --tags provision
+ansible-playbook main.yml --tags provision
 
 # Stage 3: Prepare nodes only (VMs must exist)
-ansible-playbook site.yml --tags prepare
+ansible-playbook main.yml --tags prepare
 
 # Stage 4+5: Kubespray + fetch kubeconfig
-ansible-playbook site.yml --tags kubespray
+ansible-playbook main.yml --tags kubespray
 
 # Stage 6: Deploy apps only (cluster must be running)
-ansible-playbook site.yml --tags apps
+ansible-playbook main.yml --tags apps
 
 # Stage 6a: ArgoCD only
-ansible-playbook site.yml --tags argocd
+ansible-playbook main.yml --tags argocd
 
 # Stage 6b: Dashboard only
-ansible-playbook site.yml --tags dashboard
+ansible-playbook main.yml --tags dashboard
 
 # Stage 7: DNS only
-ansible-playbook site.yml --tags dns
+ansible-playbook main.yml --tags dns
 
 # Skip provisioning if VMs already exist
-ansible-playbook site.yml --skip-tags provision
+ansible-playbook main.yml --skip-tags provision
 ```
 
 ---
@@ -155,8 +171,7 @@ k8s-gcp-automation/
 ├── requirements.txt                 ← 🐍 Python deps (pip install)
 ├── requirements.yml                 ← 📦 Ansible collections
 │
-├── credentials/                     ← 🔑 Secrets for GCP + SSH
-│   ├── service-account.json         ← 🗝 GCP service account key
+├── credentials/                     ← 🔑 Secrets for SSH (ADC managed by gcloud)
 │   ├── k8s-ssh-key                  ← 🔐 SSH private key (auto-generated)
 │   └── k8s-ssh-key.pub              ← 📬 SSH public key (auto-generated)
 │
@@ -210,17 +225,38 @@ k8s-gcp-automation/
 │   └── become_pass.yml               ← 🛡 Sudo password for remote hosts
 │
 └── vars/                             ← ✏️ Variables for all roles / environments
-    ├── all.yml                        ← 🏷 Global vars
+    ├── all.yml                        ← 🏷 Global vars (includes adc_file path)
     ├── cloudflare_vars.yml            ← 🌐 Cloudflare DNS vars
     └── secrets.yml                    ← 🔑 Vaulted secrets variables
 ```
 
 ---
 
+## 🔐 GCP Authentication Details
+
+All GCP tasks use the `adc_file` variable, which points to an [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials) JSON file. This is passed to the `google.cloud.*` Ansible modules via the `auth_kind: "serviceaccount"` or `auth_kind: "application"` parameter — no hardcoded service account key file is needed.
+
+**Example usage in a GCP task:**
+
+```yaml
+- name: Create GCP instance
+  google.cloud.gcp_compute_instance:
+    name: "{{ instance_name }}"
+    project: "{{ gcp_project_id }}"
+    zone: "{{ gcp_zone_masters }}"
+    auth_kind: application
+    credentials_file: "{{ adc_file }}"
+    ...
+```
+
+> If `adc_file` is set to the default gcloud ADC path (`~/.config/gcloud/application_default_credentials.json`), no further setup is needed after running `gcloud auth application-default login`.
+
+---
+
 ## 🌐 Accessing Your Cluster
 
 ```bash
-# After site.yml completes:
+# After main.yml completes:
 export KUBECONFIG=$(pwd)/kubeconfig/admin.conf
 
 kubectl get nodes -o wide
@@ -242,10 +278,10 @@ kubectl get svc -A
 ansible all -m ping -i inventory/hosts.ini
 
 # Verbose run
-ansible-playbook site.yml -vvv
+ansible-playbook main.yml -vvv
 
 # Check Kubespray log on master1
-ssh -i files/k8s-ssh-key ubuntu@<master1-ip> \
+ssh -i credentials/k8s-ssh-key ubuntu@<master1-ip> \
   "tail -100 ~/kubespray-install.log"
 
 # Check cluster events
@@ -259,7 +295,10 @@ kubectl get svc -n ingress-nginx
 kubectl get pods -n argocd
 
 # Re-run only failed stage
-ansible-playbook site.yml --tags apps
+ansible-playbook main.yml --tags apps
+
+# Verify ADC credentials are valid
+gcloud auth application-default print-access-token
 ```
 
 ## 💣 Teardown
