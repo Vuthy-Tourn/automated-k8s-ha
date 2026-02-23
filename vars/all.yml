@@ -4,11 +4,9 @@
 # ================================================================
 
 # ── GCP Settings ─────────────────────────────────────────────────
-gcp_project_id: "winged-memory-485604-r8" # GCP project ID
+gcp_project_id: "project-4b3eaec5-c5a4-4b56-954" # GCP project ID
 service_account_file: "/Users/macbookpro/Desktop/k8s-gcp-automation/credentials/service-account.json" # Path to SA JSON key
-# gcp_region: "asia-northeast3"
-# gcp_zone_masters: "asia-northeast3-a"
-# gcp_zone_workers: "asia-northeast3-b"
+adc_file: "/Users/macbookpro/Desktop/k8s-gcp-automation/credentials/adc_file.json"
 
 # ── VM Defaults (overridable per node_group) ──────────────────────
 gcp_machine_type: "e2-standard-2" # 2 vCPU / 8 GB RAM
@@ -16,9 +14,83 @@ gcp_image_family: "ubuntu-2204-lts"
 gcp_image_project: "ubuntu-os-cloud"
 gcp_disk_size_gb: 50
 gcp_disk_type: "pd-standard"
-gcp_network: "k8s-network"
-gcp_subnet: "k8s-subnet"
-gcp_subnet_cidr: "10.10.0.0/24"
+
+# ── Kubernetes Firewall Rules ─────────────────────────────────────
+k8s_firewall_rules:
+
+  # Internal cluster traffic (all nodes talk to each other freely)
+  - name: "{{ cluster_name }}-allow-internal"
+    protocol: tcp
+    ports: ["0-65535"]
+    tags: ["{{ cluster_name }}-node"]
+    source_ranges: ["10.0.0.0/8"]
+    description: "Allow all internal TCP between cluster nodes"
+
+  - name: "{{ cluster_name }}-allow-internal-udp"
+    protocol: udp
+    ports: ["0-65535"]
+    tags: ["{{ cluster_name }}-node"]
+    source_ranges: ["10.0.0.0/8"]
+    description: "Allow all internal UDP between cluster nodes (flannel/calico/weave)"
+
+  - name: "{{ cluster_name }}-allow-internal-icmp"
+    protocol: icmp
+    ports: []
+    tags: ["{{ cluster_name }}-node"]
+    source_ranges: ["10.0.0.0/8"]
+    description: "Allow ICMP between cluster nodes"
+
+  # Control plane (masters)
+  - name: "{{ cluster_name }}-allow-apiserver"
+    protocol: tcp
+    ports: ["6443"]
+    tags: ["{{ cluster_name }}-master"]
+    source_ranges: ["0.0.0.0/0"]
+    description: "Kubernetes API server"
+
+  - name: "{{ cluster_name }}-allow-etcd"
+    protocol: tcp
+    ports: ["2379", "2380"]
+    tags: ["{{ cluster_name }}-master"]
+    source_ranges: ["10.0.0.0/8"]
+    description: "etcd server client and peer communication"
+
+  - name: "{{ cluster_name }}-allow-controller-manager"
+    protocol: tcp
+    ports: ["10257"]
+    tags: ["{{ cluster_name }}-master"]
+    source_ranges: ["10.0.0.0/8"]
+    description: "kube-controller-manager"
+
+  - name: "{{ cluster_name }}-allow-scheduler"
+    protocol: tcp
+    ports: ["10259"]
+    tags: ["{{ cluster_name }}-master"]
+    source_ranges: ["10.0.0.0/8"]
+    description: "kube-scheduler"
+
+  # Workers
+  - name: "{{ cluster_name }}-allow-kubelet"
+    protocol: tcp
+    ports: ["10250"]
+    tags: ["{{ cluster_name }}-node"]
+    source_ranges: ["10.0.0.0/8"]
+    description: "Kubelet API (masters need to reach workers)"
+
+  - name: "{{ cluster_name }}-allow-nodeport"
+    protocol: tcp
+    ports: ["30000-32767"]
+    tags: ["{{ cluster_name }}-node"]
+    source_ranges: ["0.0.0.0/0"]
+    description: "Kubernetes NodePort services"
+
+  # SSH
+  - name: "{{ cluster_name }}-allow-ssh"
+    protocol: tcp
+    ports: ["22"]
+    tags: ["{{ cluster_name }}-node"]
+    source_ranges: ["0.0.0.0/0"]
+    description: "SSH access to all cluster nodes"
 
 # ── Cluster Identity ──────────────────────────────────────────────
 cluster_name: "ha-k8s"
@@ -56,77 +128,22 @@ node_groups:
       - "{{ cluster_name }}-node"
       - "{{ cluster_name }}-worker"
 
-  # Example: add a dedicated infra node group (uncomment to enable)
-  # - role:         infra
-  #   count:        1
-  #   zone:         "{{ gcp_zone_workers }}"
-  #   machine_type: "e2-standard-4"          # bigger for monitoring stack
-  #   disk_size_gb: 100
-  #   tags:
-  #     - "{{ cluster_name }}-node"
-  #     - "{{ cluster_name }}-infra"
-
-# ── Firewall Rules — driven by this list, no task changes needed ──
-firewall_rules:
-  - name: allow-internal
-    allowed:
-      - ip_protocol: tcp
-        ports: ["0-65535"]
-      - ip_protocol: udp
-        ports: ["0-65535"]
-      - ip_protocol: icmp
-    source_ranges: ["{{ gcp_subnet_cidr }}"]
-    target_tags: ["{{ cluster_name }}-node"]
-
-  - name: allow-ssh
-    allowed:
-      - ip_protocol: tcp
-        ports: ["22"]
-    source_ranges: ["0.0.0.0/0"]
-    target_tags: ["{{ cluster_name }}-node"]
-
-  - name: allow-k8s-api
-    allowed:
-      - ip_protocol: tcp
-        ports: ["6443"]
-    source_ranges: ["0.0.0.0/0"]
-    target_tags: ["{{ cluster_name }}-master"]
-
-  - name: allow-http-https
-    allowed:
-      - ip_protocol: tcp
-        ports: ["80", "443"]
-    source_ranges: ["0.0.0.0/0"]
-    target_tags: ["{{ cluster_name }}-worker"]
-
-  - name: allow-nodeport
-    allowed:
-      - ip_protocol: tcp
-        ports: ["30000-32767"]
-    source_ranges: ["0.0.0.0/0"]
-    target_tags: ["{{ cluster_name }}-node"]
-
-network_name: "k8s-infra-network"
 # ── SSH ───────────────────────────────────────────────────────────
 ssh_user: "k8s-cluster-key"
-ssh_private_key: "/Users/macbookpro/Desktop/k8s-gcp-automation/credentials/k8s-ssh-key"
-ssh_public_key:  "/Users/macbookpro/Desktop/k8s-gcp-automation/credentials/k8s-ssh-key.pub"
+ssh_private_key: "/Users/macbookpro/Desktop/k8s-gcp-automation/credentials/k8s-ssh-adc-key"
+ssh_public_key:  "/Users/macbookpro/Desktop/k8s-gcp-automation/credentials/k8s-ssh-adc-key.pub"
 
 # ── Kubernetes ────────────────────────────────────────────────────
 kubespray_version: "v2.29.0"
 kubespray_repo: "https://github.com/kubernetes-sigs/kubespray"
-kube_version: "1.33.5"
-lb_ip_or_dns:  "lb.k8s.example.com"
+kube_version: "1.31.1"          
+kube_vip_enabled: false 
 kube_network_plugin: "calico"
-kube_pod_subnet: "192.168.0.0/17"
-kube_service_subnet: "192.168.128.0/17"
-# kube-vip VIP — must be a free IP inside gcp_subnet_cidr
-kube_vip_address: "10.10.0.100"
-
+kubeconfig_path: "/home/{{ ssh_user }}/.kube/config"
 # ── ArgoCD ────────────────────────────────────────────────────────
 argocd_version: "v2.10.3"
 argocd_namespace: "argocd"
 argocd_admin_password: "ChangeMe123!" # Change this!
 
 # ── K8s Dashboard ────────────────────────────────────────────────
-dashboard_namespace: "kubernetes-dashboard"
+dashboard_namespace: "kube-system"

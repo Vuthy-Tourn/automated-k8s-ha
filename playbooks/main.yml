@@ -57,27 +57,17 @@
   roles:
     - role: kubespray-deploy
 
-# ── STAGE 4: Cloudflare DNS ───────────────────────────────────────
-- name: "STAGE 4 | Configure Cloudflare DNS records"
-  hosts: localhost
-  connection: local
+# ── STAGE 4: Add domain name with Cloudflare DNS ───────────────────────────────────────
+- name: "STAGE 4 | add domain & https Kubernetes dashboard and Argocd "
+  hosts: "{{ cluster_name }}-master-1"
   gather_facts: no
-  tags: [dns]
+  become: yes
+  tags: [domains]
   vars_files:
     - ../vars/all.yml
     - ../vars/cloudflare_vars.yml
-  pre_tasks:
-    - name: Lookup Cloudflare Zone ID
-      uri:
-        url: "https://api.cloudflare.com/client/v4/zones?name={{ cloudflare_zone }}"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ cloudflare_api_token }}"
-        status_code: 200
-      register: cf_zone_lookup
-
-    - name: Set Zone ID fact
-      set_fact:
-        cf_zone_id: "{{ cf_zone_lookup.json.result[0].id }}"
+    - ../vars/secrets.yml
   roles:
+    - role: argocd
+    - role: k8s-dashboard
     - role: cloudflare-dns

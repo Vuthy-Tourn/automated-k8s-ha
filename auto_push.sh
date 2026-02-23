@@ -16,8 +16,18 @@ else
   COMMIT_MESSAGE="$1"
 fi
 
-# Use current branch name
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
+# Use provided branch or current branch
+if [ -z "$2" ]; then
+  BRANCH=$(git rev-parse --abbrev-ref HEAD)
+else
+  BRANCH="$2"
+  # Create the branch locally if it doesn't exist
+  if ! git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
+    git checkout -b "$BRANCH"
+  else
+    git checkout "$BRANCH"
+  fi
+fi
 
 git add .
 git commit -m "$COMMIT_MESSAGE"

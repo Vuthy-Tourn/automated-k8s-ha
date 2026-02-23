@@ -13,7 +13,6 @@
       Content-Type: "application/json"
     status_code: 200
   register: cf_zone_lookup
-  delegate_to: localhost
 
 - name: Fail if zone not found
   fail:
@@ -29,7 +28,7 @@
 # GCP firewall allows 80/443 to worker tag
 - name: Set DNS target IP to first worker external IP
   set_fact:
-    ingress_ip: "{{ node_info | selectattr('role', 'equalto', 'worker') | map(attribute='external_ip') | first }}"
+    ingress_ip: "{{ lookup('file', '../inventory/node_info.json') | from_json | selectattr('role', 'equalto', 'worker') | map(attribute='external_ip') | first }}"
 
 - name: Display DNS target
   debug:
@@ -44,7 +43,6 @@
       Authorization: "Bearer {{ cloudflare_api_token }}"
     status_code: 200
   register: cf_check_dashboard
-  delegate_to: localhost
 
 - name: Create Dashboard DNS record (if new)
   uri:
@@ -62,7 +60,6 @@
       proxied: "{{ cloudflare_proxied }}"
     status_code: [200, 201]
   when: cf_check_dashboard.json.result | length == 0
-  delegate_to: localhost
 
 - name: Update Dashboard DNS record (if existing)
   uri:
@@ -80,7 +77,6 @@
       proxied: "{{ cloudflare_proxied }}"
     status_code: 200
   when: cf_check_dashboard.json.result | length > 0
-  delegate_to: localhost
 
 - name: Check if ArgoCD DNS record already exists
   uri:
@@ -90,7 +86,6 @@
       Authorization: "Bearer {{ cloudflare_api_token }}"
     status_code: 200
   register: cf_check_argocd
-  delegate_to: localhost
 
 - name: Create ArgoCD DNS record (if new)
   uri:
@@ -108,7 +103,6 @@
       proxied: "{{ cloudflare_proxied }}"
     status_code: [200, 201]
   when: cf_check_argocd.json.result | length == 0
-  delegate_to: localhost
 
 - name: Update ArgoCD DNS record (if existing)
   uri:
@@ -126,11 +120,34 @@
       proxied: "{{ cloudflare_proxied }}"
     status_code: 200
   when: cf_check_argocd.json.result | length > 0
-  delegate_to: localhost
 
-- name: DNS configuration complete
+# ────────────────────────────────────────────────────────────────
+# 🎉 Final Summary
+# ────────────────────────────────────────────────────────────────
+- name: "Read ArgoCD credentials"
+  slurp:
+    src: "/home/{{ ssh_user }}/argocd-credentials.txt"
+  register: argocd_creds
+
+- name: "Read Dashboard credentials"
+  slurp:
+    src: "/home/{{ ssh_user }}/dashboard-credentials.txt"
+  register: dashboard_creds
+
+- name: "DNS + Deployment Summary"
   debug:
-    msg: |
-      ✅ Cloudflare DNS records configured!
-      📊 {{ dashboard_subdomain }}.{{ cloudflare_zone }} → {{ ingress_ip }}
-      🚀 {{ argocd_subdomain }}.{{ cloudflare_zone }}    → {{ ingress_ip }}
+    msg:
+      - "========================================"
+      - "✅ DEPLOYMENT COMPLETE"
+      - "========================================"
+      - "🌐 DNS Records → {{ ingress_ip }}"
+      - "----------------------------------------"
+      - "🚀 ArgoCD"
+      - "   URL      : https://{{ argocd_subdomain }}.{{ cloudflare_zone }}"
+      - "   Username : admin"
+      - "   Password : {{ argocd_password.stdout }}"
+      - "----------------------------------------"
+      - "📊 Kubernetes Dashboard"
+      - "   URL      : https://{{ dashboard_subdomain }}.{{ cloudflare_zone }}"
+      - "   Token    : {{ dashboard_token.stdout }}"
+      - "========================================"

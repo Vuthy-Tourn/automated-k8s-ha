@@ -15,11 +15,12 @@
     - name: Confirm teardown
       pause:
         prompt: |
-          ⚠️  WARNING: This will DESTROY all GCP VMs and network resources
+          ⚠️  WARNING: This will DESTROY all GCP VMs and firewall rules
           for cluster '{{ cluster_name }}' in project '{{ gcp_project_id }}'.
           Press ENTER to continue or Ctrl+C to abort.
 
-    - name: Build VM definition list from node_groups
+    # ── Build flat VM list (mirrors create-gcp exactly) ──────────
+    - name: Build flat VM definition list from node_groups
       set_fact:
         all_vm_definitions: "{{ _vms }}"
       vars:
@@ -35,53 +36,44 @@
           {%- endfor -%}
           {{ vms }}
 
+    # ── Delete VMs ────────────────────────────────────────────────
     - name: Delete all cluster VMs
       google.cloud.gcp_compute_instance:
         name: "{{ item.name }}"
         zone: "{{ item.zone }}"
         project: "{{ gcp_project_id }}"
-        auth_kind: serviceaccount
-        service_account_file: "{{ service_account_file }}"
+        auth_kind: application
         state: absent
       loop: "{{ all_vm_definitions }}"
       loop_control:
-        label: "{{ item.name }}"
+        label: "{{ item.name }} ({{ item.zone }})"
+      environment:
+        GOOGLE_APPLICATION_CREDENTIALS: "{{ adc_file }}"
+        GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES: "1"
 
-    - name: Delete firewall rules
+
+    # ── Delete firewall rules ─────────────────────────────────────
+    - name: Delete Kubernetes firewall rules
       google.cloud.gcp_compute_firewall:
-        name: "{{ cluster_name }}-{{ item.name }}"
+        name: "{{ item.name }}"
         project: "{{ gcp_project_id }}"
-        auth_kind: serviceaccount
-        service_account_file: "{{ service_account_file }}"
+        auth_kind: application
         state: absent
-      loop: "{{ firewall_rules }}"
+      loop: "{{ k8s_firewall_rules }}"
       loop_control:
-        label: "{{ cluster_name }}-{{ item.name }}"
+        label: "{{ item.name }}"
+      environment:
+        GOOGLE_APPLICATION_CREDENTIALS: "{{ adc_file }}"
+        GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES: "1"
 
-    - name: Delete subnet
-      google.cloud.gcp_compute_subnetwork:
-        name: "{{ gcp_subnet }}"
-        region: "{{ gcp_region }}"
-        project: "{{ gcp_project_id }}"
-        auth_kind: serviceaccount
-        service_account_file: "{{ service_account_file }}"
-        state: absent
-
-    - name: Delete VPC network
-      google.cloud.gcp_compute_network:
-        name: "{{ gcp_network }}"
-        project: "{{ gcp_project_id }}"
-        auth_kind: serviceaccount
-        service_account_file: "{{ service_account_file }}"
-        state: absent
-
-    - name: Clean up generated inventory files
+    # ── Clean up local generated files ────────────────────────────
+    - name: Clean up generated inventory and node info files
       file:
         path: "{{ item }}"
         state: absent
       loop:
-        - inventory/hosts.ini
-        - inventory/kubespray-hosts.yaml
+        - ../../inventory/inventory.ini
+        - ../../inventory/node_info.json
 
     - name: Teardown complete
       debug:

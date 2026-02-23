@@ -5,13 +5,15 @@
 # ================================================================
 
 # ── Controller dependencies ───────────────────────────────────────
-- name: Install required Python packages on controller
+- name: Verify required Python packages on controller
   pip:
     name:
       - requests
       - google-auth
       - google-api-python-client
+      - packaging
     state: present
+  delegate_to: localhost
 
 - name: Install Ansible GCP collection
   command: ansible-galaxy collection install google.cloud --force
@@ -50,95 +52,27 @@
   set_fact:
     ssh_pub_key: "{{ _ssh_pub_raw.content | b64decode | trim }}"
 
-# ── VPC Network ───────────────────────────────────────────────────
-- name: Create GCP VPC network
-  google.cloud.gcp_compute_network:
-    name: "{{ gcp_network }}"
-    auto_create_subnetworks: false
-    project: "{{ gcp_project_id }}"
-    auth_kind: serviceaccount
-    service_account_file: "{{ service_account_file }}"
-    state: present
-  register: gcp_network_result
-
-# ── Subnets ───────────────────────────────────────────────────────
-- name: Create GCP subnets per region
-  google.cloud.gcp_compute_subnetwork:
-    name: "{{ gcp_subnet }}-{{ item.region }}"
-    ip_cidr_range: "{{ item.subnet_cidr }}"
-    region: "{{ item.region }}"
-    network: "{{ gcp_network_result }}"
-    project: "{{ gcp_project_id }}"
-    auth_kind: serviceaccount
-    service_account_file: "{{ service_account_file }}"
-    state: present
-  loop: >-
-    {{
-      node_groups
-      | selectattr('subnet_cidr', 'defined')
-      | selectattr('region', 'defined')
-      | unique
-      | list
-    }}
-  loop_control:
-    label: "{{ item.region }} → {{ item.subnet_cidr }}"
-  register: subnet_results
-
-# Build region → subnet result map so VM task can reference the registered object
-- name: Build subnet lookup map by region
-  set_fact:
-    subnet_by_region: >-
-      {{
-        subnet_by_region | default({}) | combine({
-          item.item.region: item
-        })
-      }}
-  loop: "{{ subnet_results.results }}"
-  loop_control:
-    label: "{{ item.item.region }}"
-
 # ── Firewall Rules ────────────────────────────────────────────────
-- name: Allow SSH
+- name: Create Kubernetes firewall rules
   google.cloud.gcp_compute_firewall:
-    name: "{{ gcp_network }}-allow-ssh"
-    network: "{{ gcp_network_result }}"
+    name: "{{ item.name }}"
+    network:
+      selfLink: "https://www.googleapis.com/compute/v1/projects/{{ gcp_project_id }}/global/networks/default"
     allowed:
-      - ip_protocol: tcp
-        ports: ["22"]
-    source_ranges: ["0.0.0.0/0"]
+      - ip_protocol: "{{ item.protocol }}"
+        ports: "{{ item.ports }}"
+    target_tags: "{{ item.tags }}"
+    source_ranges: "{{ item.source_ranges }}"
+    description: "{{ item.description }}"
     project: "{{ gcp_project_id }}"
-    auth_kind: serviceaccount
-    service_account_file: "{{ service_account_file }}"
+    auth_kind: application
     state: present
-
-- name: Allow HTTP and HTTPS traffic
-  google.cloud.gcp_compute_firewall:
-    name: "{{ gcp_network }}-allow-web"
-    network: "{{ gcp_network_result }}"
-    allowed:
-      - ip_protocol: tcp
-        ports: ["80", "443"]
-    target_tags: ["http-server", "https-server"]
-    source_ranges: ["0.0.0.0/0"]
-    project: "{{ gcp_project_id }}"
-    auth_kind: serviceaccount
-    service_account_file: "{{ service_account_file }}"
-    state: present
-
-- name: Allow internal Kubernetes communication
-  google.cloud.gcp_compute_firewall:
-    name: "{{ gcp_network }}-allow-k8s-internal"
-    network: "{{ gcp_network_result }}"
-    allowed:
-      - ip_protocol: tcp
-        ports:
-          - "6443"
-          - "2379-2380"
-          - "10250-10255"
-          - "179"
-    source_ranges:
-      - "10.10.0.0/16"
-    state: present
+  loop: "{{ k8s_firewall_rules }}"
+  loop_control:
+    label: "{{ item.name }}"
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: "{{ adc_file }}"
+    GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES: "1"
 
 # ── Build flat VM list ────────────────────────────────────────────
 - name: Build flat VM definition list from node_groups
@@ -169,12 +103,10 @@
     msg: |
       📋 VM plan ({{ all_vm_definitions | length }} total):
       {% for vm in all_vm_definitions %}
-        [{{ vm.role | upper }}] {{ vm.name }}  zone={{ vm.zone }}  type={{ vm.machine_type }}  subnet={{ gcp_subnet }}-{{ vm.region }}
+        [{{ vm.role | upper }}] {{ vm.name }}  zone={{ vm.zone }}  type={{ vm.machine_type }}  region={{ vm.region }}
       {% endfor %}
   failed_when: >-
     all_vm_definitions | selectattr('region', 'equalto', 'MISSING-REGION') | list | length > 0
-    or
-    all_vm_definitions | selectattr('subnet_cidr', 'equalto', 'MISSING-CIDR') | list | length > 0
 
 # ── Create ALL VMs ────────────────────────────────────────────────
 - name: Create all cluster VMs
@@ -190,8 +122,8 @@
           disk_size_gb: "{{ item.disk_size }}"
           disk_type: "{{ item.disk_type | default(gcp_disk_type) }}"
     network_interfaces:
-      - network: "{{ gcp_network_result }}"
-        subnetwork: "{{ subnet_by_region[item.region] }}"  # registered object — carries selfLink internally
+      - network:
+          selfLink: "projects/{{gcp_project_id}}/global/networks/default"
         access_configs:
           - name: External NAT
             type: ONE_TO_ONE_NAT
@@ -201,8 +133,7 @@
     tags:
       items: "{{ item.tags }}"
     project: "{{ gcp_project_id }}"
-    auth_kind: serviceaccount
-    service_account_file: "{{ service_account_file }}"
+    auth_kind: application
     state: present
   loop: "{{ all_vm_definitions }}"
   loop_control:
@@ -211,6 +142,9 @@
   retries: 3          # ← retry up to 3 times
   delay: 15           # ← wait 15s between retries
   until: vm_results is not failed
+  environment: 
+      GOOGLE_APPLICATION_CREDENTIALS: "{{ adc_file }}"
+      GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES: "1"
 
 # ── Extract IPs ───────────────────────────────────────────────────
 - name: Wait for VMs to finish startup-script
@@ -267,11 +201,6 @@
   template:
     src: "../../templates/dynamic-hosts.ini.j2"
     dest: "../inventory/inventory.ini"
-
-- name: Write Kubespray hosts.yaml (for master1 to use)
-  template:
-    src: "../../templates/kubespray-hosts.yaml.j2"
-    dest: "../inventory/kubespray-hosts.yaml"
 
 - name: Refresh in-memory Ansible inventory
   meta: refresh_inventory

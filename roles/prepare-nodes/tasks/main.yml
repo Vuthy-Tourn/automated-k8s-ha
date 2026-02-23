@@ -1,4 +1,5 @@
-# Wait for any background apt/dpkg process to finish before we touch packages
+---
+# ── Wait for apt lock ─────────────────────────────────────────────
 - name: Wait for apt lock to be released
   shell: |
     while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
@@ -7,13 +8,12 @@
     done
   changed_when: false
 
-# Refresh package index so we get latest versions
+# ── Packages ──────────────────────────────────────────────────────
 - name: Update apt cache
   apt:
     update_cache: yes
     cache_valid_time: 3600
 
-# Install tools required by Kubernetes, Kubespray, and general node operation
 - name: Install required base packages
   apt:
     name:
@@ -38,29 +38,33 @@
       - rsync
       - unzip
     state: present
-    update_cache: yes
 
-# Kubernetes requires swap off — kubelet won't start if swap is active
+# ── Swap ──────────────────────────────────────────────────────────
 - name: Disable swap immediately
   command: swapoff -a
   when: ansible_swaptotal_mb > 0
   changed_when: true
 
-# Prevent swap from re-enabling after reboot
 - name: Remove swap from /etc/fstab permanently
   replace:
     path: /etc/fstab
     regexp: '^([^#].*?\sswap\s+\S+\s+.*)$'
     replace: '# \1'
 
-# Load networking + IPVS modules needed by containerd and kube-proxy
+# ── Kernel modules ────────────────────────────────────────────────
 - name: Load required kernel modules now
   modprobe:
     name: "{{ item }}"
     state: present
-  loop: [br_netfilter, overlay, ip_vs, ip_vs_rr, ip_vs_wrr, ip_vs_sh, nf_conntrack]
+  loop:
+    - br_netfilter
+    - overlay
+    - ip_vs
+    - ip_vs_rr
+    - ip_vs_wrr
+    - ip_vs_sh
+    - nf_conntrack
 
-# Ensure modules are still loaded after reboot
 - name: Persist kernel modules across reboots
   copy:
     dest: /etc/modules-load.d/k8s.conf
@@ -73,7 +77,7 @@
       ip_vs_sh
       nf_conntrack
 
-# Enable IP forwarding and bridge traffic visibility required for pod networking
+# ── Sysctl ────────────────────────────────────────────────────────
 - name: Apply sysctl settings for Kubernetes
   sysctl:
     name: "{{ item.key }}"
@@ -91,13 +95,12 @@
     - { key: 'fs.inotify.max_user_instances',        value: '512' }
     - { key: 'kernel.pid_max',                       value: '4194304' }
 
-# Set hostname so it matches the Ansible inventory name (needed for TLS certs)
+# ── Hostname + /etc/hosts ─────────────────────────────────────────
 - name: Set hostname to match inventory name
   hostname:
     name: "{{ inventory_hostname }}"
 
-# Let every node resolve every other node by name via internal IP
-- name: Add all cluster nodes to /etc/hosts (internal IPs)
+- name: Add all cluster nodes to /etc/hosts
   lineinfile:
     path: /etc/hosts
     regexp: "^.*{{ item }}$"
@@ -105,7 +108,25 @@
     state: present
   loop: "{{ groups['all'] }}"
 
-# Raise open file/process limits — default Linux values are too low for Kubernetes
+# ── Load node_info ────────────────────────────────────────────────
+- name: Load node_info from file
+  set_fact:
+    node_info: "{{ lookup('file', '../inventory/node_info.json') | from_json }}"
+  run_once: true
+  delegate_to: localhost
+  when: node_info is not defined
+
+# Kubespray hardcodes lb-apiserver.kubernetes.local as the control
+# plane FQDN — add it here so all nodes can resolve it without a
+# real load balancer or external DNS
+- name: Add lb-apiserver.kubernetes.local to /etc/hosts
+  lineinfile:
+    path: /etc/hosts
+    regexp: "lb-apiserver.kubernetes.local"
+    line: "{{ (node_info | selectattr('role', 'equalto', 'master') | list | first).internal_ip }} lb-apiserver.kubernetes.local"
+    state: present
+
+# ── File descriptor limits ────────────────────────────────────────
 - name: Set file descriptor limits
   pam_limits:
     domain: '*'
@@ -118,20 +139,21 @@
     - { type: 'soft', item: 'nproc',    value: 'unlimited' }
     - { type: 'hard', item: 'nproc',    value: 'unlimited' }
 
-# Sync clocks across all nodes — clock drift breaks etcd and TLS certificates
-- name: Start and enable chrony (NTP)
+# ── Chrony ────────────────────────────────────────────────────────
+- name: Start and enable chrony
   systemd:
     name: chrony
     state: started
     enabled: yes
 
-# UFW would block Kubespray's iptables rules — disable it entirely
+# ── UFW ───────────────────────────────────────────────────────────
+# UFW would block Kubespray's iptables rules — disable entirely
 - name: Disable UFW
   systemd:
     name: ufw
     state: stopped
     enabled: no
-  ignore_errors: yes  # UFW may not be installed, that's fine
+  ignore_errors: yes
 
 - name: Node preparation complete
   debug:
