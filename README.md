@@ -220,8 +220,7 @@ k8s-gcp-automation/
 │           └── main.yml
 │
 ├── secrets/                          ← 🔒 Vault / become password storage
-│   ├── vault_pass.txt                ← 🗝 Vault password
-│   └── become_pass.yml               ← 🛡 Sudo password for remote hosts
+│   └── vault_pass.txt                ← 🗝 Vault password
 │
 └── vars/                             ← ✏️ Variables for all roles / environments
     ├── all.yml                        ← 🏷 Global vars (includes adc_file path)
