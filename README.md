@@ -23,7 +23,6 @@ Your Local Machine (Ansible Controller)
 │                  │   ha-k8s-worker-2  10.10.0.x            │
 │                  └─────────────────────────────────────────┘
 │                  Write → inventory/hosts.ini (dynamic, from real IPs)
-│                  Write → inventory/kubespray-hosts.yaml
 │
 ├─ STAGE 3 ─────► All 5 VMs (parallel)
 │                  Disable swap, sysctl, kernel modules
