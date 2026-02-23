@@ -9,14 +9,13 @@
 #   4. Install system dependencies on master1
 #   5. Clone Kubespray
 #   6. pip install requirements into venv
-#   7. Write inventory, addons.yml, k8s-cluster.yml
+#   7. Write inventory, addons.yml, patch cluster config
 #   8. Run cluster.yml (backgrounded via nohup, polled every 30s)
-#   9. Set up kubectl
+#   9. Fix RBAC if needed
+#  10. Set up kubectl
 # ================================================================
 
 # ── Step 1: Authorize public key on ALL nodes ─────────────────────
-# master1 SSHes to all other nodes during cluster.yml — every node
-# must trust the cluster key, not just master1
 - name: Authorize cluster SSH public key on all nodes
   authorized_key:
     user: "{{ ssh_user }}"
@@ -28,7 +27,6 @@
     label: "{{ item }}"
 
 # ── Step 2: Push SSH key to master1 ──────────────────────────────
-# master1 needs the private key to initiate SSH connections to other nodes
 - name: Ensure .ssh directory exists on master1
   file:
     path: "/home/{{ ssh_user }}/.ssh"
@@ -54,7 +52,6 @@
     mode: '0644'
 
 # ── Step 3: Scan host keys on master1 ────────────────────────────
-# Prevents "host key verification failed" when master1 SSHes to other nodes
 - name: Scan and register all node host keys on master1
   shell: |
     ssh-keyscan -t rsa {{ hostvars[item]['ip'] }} \
@@ -162,12 +159,19 @@
     owner: "{{ ssh_user }}"
     mode: '0644'
 
-- name: Write k8s-cluster.yml
-  template:
-    src: k8s-cluster.yml.j2
-    dest: "/home/{{ ssh_user }}/kubespray/inventory/sample/group_vars/k8s_cluster/k8s-cluster.yml"
-    owner: "{{ ssh_user }}"
-    mode: '0644'
+# - name: Patch Kubespray with minimum required cluster values
+#   blockinfile:
+#     path: "/home/{{ ssh_user }}/kubespray/inventory/sample/group_vars/all/all.yml"
+#     marker: "# {mark} ANSIBLE MANAGED BLOCK"
+#     block: |
+#       kube_version: "{{ kube_version }}"
+#       cluster_name: "{{ cluster_name }}.local"
+#       kube_network_plugin: "{{ kube_network_plugin }}"
+#       containerd_sandbox_image: "registry.k8s.io/pause:3.10"
+#       containerd_config_default_write: true
+#       loadbalancer_apiserver:
+#         address: "{{ (node_info | selectattr('role', 'equalto', 'master') | list | first).internal_ip }}"
+#         port: 6443
 
 # ── Step 8: Run cluster.yml ───────────────────────────────────────
 # Launched via nohup so the process survives SSH disconnects.
@@ -237,10 +241,46 @@
   args:
     executable: /bin/bash
   register: _recap_check
-  failed_when: _recap_check.rc == 0   # rc=0 means grep FOUND failures
+  failed_when: _recap_check.rc == 0
   changed_when: false
 
-# ── Step 9: Set up kubectl on master1 ────────────────────────────
+# ── Step 9: Fix RBAC if needed ────────────────────────────────────
+# Kubespray sometimes generates admin.conf without full cluster-admin
+# binding when kubeadm partially fails and retries. super-admin.conf
+# bypasses RBAC and can fix this without reprovisioning.
+- name: Check if kubernetes-admin has cluster-admin access
+  shell: |
+    kubectl --kubeconfig /etc/kubernetes/admin.conf get nodes > /dev/null 2>&1
+    echo $?
+  args:
+    executable: /bin/bash
+  register: _admin_check
+  changed_when: false
+  become: yes
+
+- name: Bind kubernetes-admin to cluster-admin if missing
+  shell: |
+    kubectl --kubeconfig /etc/kubernetes/super-admin.conf \
+      create clusterrolebinding kubernetes-admin-binding \
+      --clusterrole=cluster-admin \
+      --user=kubernetes-admin
+  args:
+    executable: /bin/bash
+  become: yes
+  when: _admin_check.stdout != "0"
+  ignore_errors: yes
+
+- name: Verify kubernetes-admin can access cluster
+  shell: kubectl --kubeconfig /etc/kubernetes/admin.conf get nodes
+  args:
+    executable: /bin/bash
+  become: yes
+  register: _admin_verify
+  retries: 5
+  delay: 10
+  until: _admin_verify.rc == 0
+
+# ── Step 10: Set up kubectl on master1 ───────────────────────────
 - name: Verify admin.conf was created by Kubespray
   stat:
     path: /etc/kubernetes/admin.conf

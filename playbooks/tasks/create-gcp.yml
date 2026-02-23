@@ -57,7 +57,7 @@
   google.cloud.gcp_compute_firewall:
     name: "{{ item.name }}"
     network:
-      selfLink: "projects/{{ gcp_project_id }}/global/networks/default"
+      selfLink: "https://www.googleapis.com/compute/v1/projects/{{ gcp_project_id }}/global/networks/default"
     allowed:
       - ip_protocol: "{{ item.protocol }}"
         ports: "{{ item.ports }}"
@@ -103,12 +103,10 @@
     msg: |
       📋 VM plan ({{ all_vm_definitions | length }} total):
       {% for vm in all_vm_definitions %}
-        [{{ vm.role | upper }}] {{ vm.name }}  zone={{ vm.zone }}  type={{ vm.machine_type }}  subnet={{ gcp_subnet }}-{{ vm.region }}
+        [{{ vm.role | upper }}] {{ vm.name }}  zone={{ vm.zone }}  type={{ vm.machine_type }}  region={{ vm.region }}
       {% endfor %}
   failed_when: >-
     all_vm_definitions | selectattr('region', 'equalto', 'MISSING-REGION') | list | length > 0
-    or
-    all_vm_definitions | selectattr('subnet_cidr', 'equalto', 'MISSING-CIDR') | list | length > 0
 
 # ── Create ALL VMs ────────────────────────────────────────────────
 - name: Create all cluster VMs

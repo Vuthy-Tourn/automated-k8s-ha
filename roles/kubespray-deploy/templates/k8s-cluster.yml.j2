@@ -13,6 +13,11 @@ loadbalancer_apiserver:
   address: "{{ (node_info | selectattr('role', 'equalto', 'master') | list | first).internal_ip }}"
   port: 6443
 
+# Force Kubespray to use correct sandbox image
+containerd_default_runtime_name: runc
+containerd_sandbox_image: "registry.k8s.io/pause:3.10"
+containerd_config_default_write: true
+
 supplementary_addresses_in_ssl_keys:
   - "127.0.0.1"
   - "localhost"

@@ -9,10 +9,6 @@ ansible_ssh_private_key_file=/home/{{ ssh_user }}/.ssh/id_rsa
 ansible_ssh_extra_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
 ansible_python_interpreter=/usr/bin/python3
 
-# Kubernetes API exposed via Load Balancer
-kube_version="{{ kube_version }}"
-kube_network_plugin="calico"
-
 # ── Control Plane (masters) ───────────────────────────────────────
 [kube_control_plane]
 {% set masters = node_info | selectattr('role', 'equalto', 'master') | list %}

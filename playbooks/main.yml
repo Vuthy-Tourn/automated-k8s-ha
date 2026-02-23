@@ -40,7 +40,7 @@
   hosts: all
   gather_facts: yes
   become: yes
-  tags: [prepare]
+  tags: [prepare, always]
   vars_files:
     - ../vars/all.yml
   roles:

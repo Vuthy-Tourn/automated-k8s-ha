@@ -51,6 +51,7 @@
         GOOGLE_APPLICATION_CREDENTIALS: "{{ adc_file }}"
         GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES: "1"
 
+
     # ── Delete firewall rules ─────────────────────────────────────
     - name: Delete Kubernetes firewall rules
       google.cloud.gcp_compute_firewall:
@@ -71,9 +72,9 @@
         path: "{{ item }}"
         state: absent
       loop:
-        - ../inventory/inventory.ini
-        - ../inventory/kubespray-hosts.yaml
-        - ../inventory/node_info.json
+        - ../../inventory/inventory.ini
+        - ../../inventory/kubespray-hosts.yaml
+        - ../../inventory/node_info.json
 
     - name: Teardown complete
       debug:
