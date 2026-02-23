@@ -25,4 +25,3 @@ setup-domain:
 
 setup-ssl:
     ansible-playbook -i localhost playbooks/tasks/setup-ssl.yml
-

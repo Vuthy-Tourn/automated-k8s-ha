@@ -73,7 +73,6 @@
         state: absent
       loop:
         - ../../inventory/inventory.ini
-        - ../../inventory/kubespray-hosts.yaml
         - ../../inventory/node_info.json
 
     - name: Teardown complete

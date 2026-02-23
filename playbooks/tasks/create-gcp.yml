@@ -202,11 +202,6 @@
     src: "../../templates/dynamic-hosts.ini.j2"
     dest: "../inventory/inventory.ini"
 
-- name: Write Kubespray hosts.yaml (for master1 to use)
-  template:
-    src: "../../templates/kubespray-hosts.yaml.j2"
-    dest: "../inventory/kubespray-hosts.yaml"
-
 - name: Refresh in-memory Ansible inventory
   meta: refresh_inventory
 

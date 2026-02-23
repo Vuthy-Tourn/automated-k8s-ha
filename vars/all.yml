@@ -139,11 +139,11 @@ kubespray_repo: "https://github.com/kubernetes-sigs/kubespray"
 kube_version: "1.31.1"          
 kube_vip_enabled: false 
 kube_network_plugin: "calico"
-
+kubeconfig_path: "/home/{{ ssh_user }}/.kube/config"
 # ── ArgoCD ────────────────────────────────────────────────────────
 argocd_version: "v2.10.3"
 argocd_namespace: "argocd"
 argocd_admin_password: "ChangeMe123!" # Change this!
 
 # ── K8s Dashboard ────────────────────────────────────────────────
-dashboard_namespace: "kubernetes-dashboard"
+dashboard_namespace: "kube-system"

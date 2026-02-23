@@ -177,7 +177,6 @@ k8s-gcp-automation/
 │
 ├── inventory/                       ← 📋 Auto-generated inventory, do not edit manually
 │   ├── inventory.ini                 ← 🖥 Nodes & IPs (dynamic hosts)
-│   ├── kubespray-hosts.yaml          ← 🏗 Kubespray inventory YAML
 │   └── node_info.json                ← 🌐 Node info (internal/external IPs, roles)
 │
 ├── playbooks/                        ← 📜 Main playbooks

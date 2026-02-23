@@ -1,6 +1,6 @@
 # ── Cloudflare ────────────────────────────────────────────────────
 cloudflare_zone:         "vuthytourn.shop"                # Your domain
-cloudflare_api_token:    "8xYz1NlPKUv7luqyiAADkUUmf-Xopx9tU-sYPPmv"  # CF API token
-cloudflare_proxied:      false
-dashboard_subdomain:     "k8s-dashboard"            
+cloudflare_api_token:    "store it with ansible-vault"  # CF API token
+cloudflare_proxied:      true
+dashboard_subdomain:     "kubernetes-dashboard"            
 argocd_subdomain:        "argocd"  
