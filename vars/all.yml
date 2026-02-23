@@ -92,6 +92,14 @@ k8s_firewall_rules:
     source_ranges: ["0.0.0.0/0"]
     description: "SSH access to all cluster nodes"
 
+  # Ingress HTTP/HTTPS
+  - name: "{{ cluster_name }}-allow-http-https"
+    protocol: tcp
+    ports: ["80", "443"]
+    tags: ["{{ cluster_name }}-node"]
+    source_ranges: ["0.0.0.0/0"]
+    description: "Allow HTTP/HTTPS traffic for ingress"
+
 # ── Cluster Identity ──────────────────────────────────────────────
 cluster_name: "ha-k8s"
 
