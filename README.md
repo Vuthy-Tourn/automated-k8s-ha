@@ -29,7 +29,7 @@ Your Local Machine (Ansible Controller)
 │                  Install packages, set /etc/hosts, NTP
 │
 ├─ STAGE 4 ─────► master1 only
-│                  Clone Kubespray v2.24.0
+│                  Clone Kubespray v2.29.0
 │                  Push inventory + group_vars
 │                  master1 → ansible-playbook cluster.yml
 │                       → installs K8s on all 5 via internal IPs
