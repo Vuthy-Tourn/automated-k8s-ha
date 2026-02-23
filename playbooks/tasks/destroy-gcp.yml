@@ -42,14 +42,12 @@
         name: "{{ item.name }}"
         zone: "{{ item.zone }}"
         project: "{{ gcp_project_id }}"
-        auth_kind: application
+        auth_kind: serviceaccount
+        service_account_file: "{{ service_account_file }}"
         state: absent
       loop: "{{ all_vm_definitions }}"
       loop_control:
         label: "{{ item.name }} ({{ item.zone }})"
-      environment:
-        GOOGLE_APPLICATION_CREDENTIALS: "{{ adc_file }}"
-        GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES: "1"
 
 
     # ── Delete firewall rules ─────────────────────────────────────
@@ -57,14 +55,12 @@
       google.cloud.gcp_compute_firewall:
         name: "{{ item.name }}"
         project: "{{ gcp_project_id }}"
-        auth_kind: application
+        auth_kind: serviceaccount
+        service_account_file: "{{ service_account_file }}"
         state: absent
       loop: "{{ k8s_firewall_rules }}"
       loop_control:
         label: "{{ item.name }}"
-      environment:
-        GOOGLE_APPLICATION_CREDENTIALS: "{{ adc_file }}"
-        GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES: "1"
 
     # ── Clean up local generated files ────────────────────────────
     - name: Clean up generated inventory and node info files

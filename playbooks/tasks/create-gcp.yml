@@ -65,14 +65,12 @@
     source_ranges: "{{ item.source_ranges }}"
     description: "{{ item.description }}"
     project: "{{ gcp_project_id }}"
-    auth_kind: application
+    auth_kind: serviceaccount
+    service_account_file: "{{ service_account_file }}"
     state: present
   loop: "{{ k8s_firewall_rules }}"
   loop_control:
     label: "{{ item.name }}"
-  environment:
-    GOOGLE_APPLICATION_CREDENTIALS: "{{ adc_file }}"
-    GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES: "1"
 
 # ── Build flat VM list ────────────────────────────────────────────
 - name: Build flat VM definition list from node_groups
@@ -133,7 +131,8 @@
     tags:
       items: "{{ item.tags }}"
     project: "{{ gcp_project_id }}"
-    auth_kind: application
+    auth_kind: serviceaccount
+    service_account_file: "{{ service_account_file }}"
     state: present
   loop: "{{ all_vm_definitions }}"
   loop_control:
@@ -142,9 +141,6 @@
   retries: 3          # ← retry up to 3 times
   delay: 15           # ← wait 15s between retries
   until: vm_results is not failed
-  environment: 
-      GOOGLE_APPLICATION_CREDENTIALS: "{{ adc_file }}"
-      GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES: "1"
 
 # ── Extract IPs ───────────────────────────────────────────────────
 - name: Wait for VMs to finish startup-script

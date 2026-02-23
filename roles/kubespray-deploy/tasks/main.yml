@@ -159,20 +159,6 @@
     owner: "{{ ssh_user }}"
     mode: '0644'
 
-# - name: Patch Kubespray with minimum required cluster values
-#   blockinfile:
-#     path: "/home/{{ ssh_user }}/kubespray/inventory/sample/group_vars/all/all.yml"
-#     marker: "# {mark} ANSIBLE MANAGED BLOCK"
-#     block: |
-#       kube_version: "{{ kube_version }}"
-#       cluster_name: "{{ cluster_name }}.local"
-#       kube_network_plugin: "{{ kube_network_plugin }}"
-#       containerd_sandbox_image: "registry.k8s.io/pause:3.10"
-#       containerd_config_default_write: true
-#       loadbalancer_apiserver:
-#         address: "{{ (node_info | selectattr('role', 'equalto', 'master') | list | first).internal_ip }}"
-#         port: 6443
-
 # ── Step 8: Run cluster.yml ───────────────────────────────────────
 # Launched via nohup so the process survives SSH disconnects.
 # async:60/poll:0 fires and forgets cleanly.
