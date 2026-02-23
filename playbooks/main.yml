@@ -57,27 +57,17 @@
   roles:
     - role: kubespray-deploy
 
-# ── STAGE 4: Cluster Addons ───────────────────────────────────────
-- name: "STAGE 4 | Deploy Cluster Addons"
+# ── STAGE 4: Add domain name with Cloudflare DNS ───────────────────────────────────────
+- name: "STAGE 4 | add domain & https Kubernetes dashboard and Argocd "
   hosts: "{{ cluster_name }}-master-1"
   gather_facts: no
   become: yes
-  tags: [addons]
-  vars_files:
-    - ../vars/all.yml
-    - ../vars/cloudflare_vars.yml
-  roles:
-    # - role: argocd
-    - role: k8s-dashboard
-
-# ── STAGE 5: Cloudflare DNS ───────────────────────────────────────
-- name: "STAGE 5 | Configure Cloudflare DNS records"
-  hosts: "{{ cluster_name }}-master-1"
-  gather_facts: no
-  tags: [dns]
+  tags: [domains]
   vars_files:
     - ../vars/all.yml
     - ../vars/cloudflare_vars.yml
     - ../vars/secrets.yml
   roles:
+    - role: argocd
+    - role: k8s-dashboard
     - role: cloudflare-dns
